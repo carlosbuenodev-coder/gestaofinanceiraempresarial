@@ -7,7 +7,7 @@ appsettings.json
 appsettings.Development.json
 
 # Backups e dados locais
-Data/
+/Data/
 *.sql
 *.bak
 
