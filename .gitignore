@@ -1,0 +1,20 @@
+# Arquivos de compilação .NET
+bin/
+obj/
+
+# Configurações locais e senhas
+appsettings.json
+appsettings.Development.json
+
+# Backups e dados locais
+Data/
+*.sql
+*.bak
+
+# Arquivos do Visual Studio e VS Code
+.vs/
+.vscode/
+*.user
+
+# Arquivos temporários
+*.log
