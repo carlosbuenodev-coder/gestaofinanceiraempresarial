@@ -14,6 +14,8 @@ namespace GestaoFinanceira.Data
         public DbSet<Empresa> Empresas { get; set; }
 
         public DbSet<Usuario> Usuarios { get; set; }
+    
+        public DbSet<AdministradorGeral> AdministradoresGerais { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -119,6 +121,47 @@ namespace GestaoFinanceira.Data
                     .HasForeignKey(u => u.EmpresaId)
                     .OnDelete(DeleteBehavior.NoAction);
             });
+            
+            // Mapeamento da tabela administradores_gerais
+            modelBuilder.Entity<AdministradorGeral>(entity =>
+            {
+                entity.ToTable("administradores_gerais");
+
+                entity.HasKey(a => a.Id);
+
+                entity.Property(a => a.Id)
+                    .HasColumnName("id")
+                    .ValueGeneratedOnAdd();
+
+                entity.Property(a => a.Nome)
+                    .HasColumnName("nome")
+                    .HasMaxLength(120)
+                    .IsRequired();
+
+                entity.Property(a => a.Email)
+                    .HasColumnName("email")
+                    .HasMaxLength(150)
+                    .IsRequired();
+
+                entity.HasIndex(a => a.Email)
+                    .IsUnique();
+
+                entity.Property(a => a.SenhaHash)
+                    .HasColumnName("senha_hash")
+                    .HasMaxLength(255)
+                    .IsRequired();
+
+                entity.Property(a => a.Ativo)
+                    .HasColumnName("ativo")
+                    .HasColumnType("tinyint(1)")
+                    .HasDefaultValue(true);
+
+                entity.Property(a => a.CriadoEm)
+                    .HasColumnName("criado_em")
+                    .HasColumnType("timestamp")
+                    .HasDefaultValueSql("CURRENT_TIMESTAMP");
+            });
+
         }
     }
 }
