@@ -1,7 +1,13 @@
-
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
 using GestaoFinanceira.Data;
 using GestaoFinanceira.Models;
+using GestaoFinanceira.Services;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using MySql.Data.MySqlClient;
 using System.ComponentModel.DataAnnotations;
 
@@ -21,9 +27,74 @@ builder.Services.AddDbContext<GestaoFinanceiraContext>(options =>
     options.UseMySQL(connectionString);
 });
 
+// A chave JWT permanece no User Secrets; nunca no repositório.
+var chaveJwtBase64 = builder.Configuration["Jwt:Key"];
+if (string.IsNullOrWhiteSpace(chaveJwtBase64))
+{
+    throw new InvalidOperationException("A chave Jwt:Key não foi configurada.");
+}
+
+byte[] chaveJwt;
+try
+{
+    chaveJwt = Convert.FromBase64String(chaveJwtBase64);
+}
+catch (FormatException)
+{
+    throw new InvalidOperationException("A chave Jwt:Key deve estar em Base64.");
+}
+
+if (chaveJwt.Length < 32)
+{
+    throw new InvalidOperationException("A chave Jwt:Key deve ter pelo menos 32 bytes.");
+}
+
+const string emissorJwt = "GestaoFinanceiraAPI";
+const string publicoJwt = "GestaoFinanceiraAPI";
+
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(opcoes =>
+    {
+        opcoes.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = emissorJwt,
+            ValidateAudience = true,
+            ValidAudience = publicoJwt,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(chaveJwt),
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromSeconds(30),
+            RoleClaimType = ClaimTypes.Role
+        };
+    });
+
+builder.Services.AddAuthorizationBuilder()
+    .AddPolicy("SomenteAdminGeral", politica =>
+        politica.RequireAuthenticatedUser()
+                .RequireRole("ADMIN_GERAL"));
+
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
+
+// Cadastro inicial do administrador geral:
+// executado somente por comando explícito e em ambiente Development.
+if (args.Contains("--criar-admin-geral"))
+{
+    if (!app.Environment.IsDevelopment())
+    {
+        Console.WriteLine(
+            "Cadastro inicial permitido somente em Development.");
+        return;
+    }
+
+    await InicializadorAdministradorGeral.ExecutarAsync(
+        app.Services);
+
+    return;
+}
 
 if (app.Environment.IsDevelopment())
 {
@@ -31,6 +102,70 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseAuthorization();
+
+// Login público: valida a senha sem devolver hash ou outros dados sensíveis.
+app.MapPost("/auth/admin/login", async (
+    LoginAdministradorRequest request,
+    GestaoFinanceiraContext contexto) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Email) ||
+        string.IsNullOrEmpty(request.Senha))
+    {
+        return Results.BadRequest(new { mensagem = "Informe e-mail e senha." });
+    }
+
+    var email = request.Email.Trim();
+    var administrador = await contexto.AdministradoresGerais
+        .AsNoTracking()
+        .FirstOrDefaultAsync(a => a.Email == email && a.Ativo);
+
+    if (administrador is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var verificador = new PasswordHasher<AdministradorGeral>();
+    var resultado = verificador.VerifyHashedPassword(
+        administrador, administrador.SenhaHash, request.Senha);
+
+    if (resultado == PasswordVerificationResult.Failed)
+    {
+        return Results.Unauthorized();
+    }
+
+    var agora = DateTime.UtcNow;
+    var expiraEm = agora.AddHours(1);
+    var claims = new[]
+    {
+        new Claim(JwtRegisteredClaimNames.Sub, administrador.Id.ToString()),
+        new Claim(JwtRegisteredClaimNames.Email, administrador.Email),
+        new Claim(ClaimTypes.Role, "ADMIN_GERAL"),
+        new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+    };
+
+    var credenciais = new SigningCredentials(
+        new SymmetricSecurityKey(chaveJwt),
+        SecurityAlgorithms.HmacSha256);
+
+    var token = new JwtSecurityToken(
+        issuer: emissorJwt,
+        audience: publicoJwt,
+        claims: claims,
+        notBefore: agora,
+        expires: expiraEm,
+        signingCredentials: credenciais);
+
+    return Results.Ok(new
+    {
+        token = new JwtSecurityTokenHandler().WriteToken(token),
+        tipo = "Bearer",
+        expiraEmUtc = expiraEm
+    });
+})
+.AllowAnonymous()
+.WithName("LoginAdministradorGeral");
 
 // Endpoint original de previsão do tempo
 var summaries = new[]
@@ -87,7 +222,8 @@ app.MapGet("/empresas", async (
 
     return Results.Ok(empresas);
 })
-.WithName("ListarEmpresas");
+.WithName("ListarEmpresas")
+.RequireAuthorization("SomenteAdminGeral");
 
 // GET - Buscar empresa pelo ID
 app.MapGet("/empresas/{id:long}", async (
@@ -108,7 +244,8 @@ app.MapGet("/empresas/{id:long}", async (
 
     return Results.Ok(empresa);
 })
-.WithName("BuscarEmpresaPorId");
+.WithName("BuscarEmpresaPorId")
+.RequireAuthorization("SomenteAdminGeral");
 
 // POST - Cadastrar empresa
 app.MapPost("/empresas", async (
@@ -169,7 +306,8 @@ app.MapPost("/empresas", async (
         $"/empresas/{empresa.Id}",
         empresa);
 })
-.WithName("CadastrarEmpresa");
+.WithName("CadastrarEmpresa")
+.RequireAuthorization("SomenteAdminGeral");
 
 // PUT - Atualizar empresa existente
 app.MapPut("/empresas/{id:long}", async (
@@ -248,7 +386,8 @@ app.MapPut("/empresas/{id:long}", async (
 
     return Results.Ok(empresa);
 })
-.WithName("AtualizarEmpresa");
+.WithName("AtualizarEmpresa")
+.RequireAuthorization("SomenteAdminGeral");
 
 app.Run();
 
@@ -417,3 +556,6 @@ record WeatherForecast(
     public int TemperatureF =>
         32 + (int)(TemperatureC / 0.5556);
 }
+
+// DTO do login; não contém a entidade ou o hash.
+record LoginAdministradorRequest(string Email, string Senha);
