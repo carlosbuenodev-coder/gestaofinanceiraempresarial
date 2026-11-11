@@ -389,6 +389,85 @@ app.MapPut("/empresas/{id:long}", async (
 .WithName("AtualizarEmpresa")
 .RequireAuthorization("SomenteAdminGeral");
 
+// POST - Cadastrar usuário de uma empresa (somente administrador geral)
+app.MapPost("/usuarios", async (
+    CriarUsuarioRequest request,
+    GestaoFinanceiraContext contexto) =>
+{
+    var erros = new Dictionary<string, string[]>();
+    var nome = request.Nome?.Trim();
+    var email = request.Email?.Trim();
+    var perfil = request.Perfil?.Trim().ToUpperInvariant();
+
+    if (request.EmpresaId <= 0)
+        erros["empresaId"] = new[] { "Informe uma empresa válida." };
+
+    if (string.IsNullOrWhiteSpace(nome) || nome.Length > 120)
+        erros["nome"] = new[] { "O nome deve ter entre 1 e 120 caracteres." };
+
+    if (string.IsNullOrWhiteSpace(email) || email.Length > 150 ||
+        !new EmailAddressAttribute().IsValid(email))
+        erros["email"] = new[] { "Informe um e-mail válido de até 150 caracteres." };
+
+    if (string.IsNullOrEmpty(request.Senha) || request.Senha.Length < 12)
+        erros["senha"] = new[] { "A senha deve ter pelo menos 12 caracteres." };
+
+    if (perfil is not ("ADMIN" or "FINANCEIRO" or "CONSULTA"))
+        erros["perfil"] = new[] { "Use ADMIN, FINANCEIRO ou CONSULTA." };
+
+    if (erros.Count > 0)
+        return Results.ValidationProblem(erros);
+
+    var empresa = await contexto.Empresas.AsNoTracking()
+        .FirstOrDefaultAsync(e => e.Id == request.EmpresaId);
+
+    if (empresa is null)
+        return Results.NotFound(new { mensagem = "Empresa não encontrada." });
+
+    if (!empresa.Ativo)
+        return Results.BadRequest(new { mensagem = "Não é permitido cadastrar usuários em empresa inativa." });
+
+    if (await contexto.Usuarios.AsNoTracking().AnyAsync(u =>
+        u.EmpresaId == request.EmpresaId && u.Email == email))
+        return Results.Conflict(new { mensagem = "Este e-mail já está cadastrado nesta empresa." });
+
+    var usuario = new Usuario
+    {
+        EmpresaId = request.EmpresaId,
+        Nome = nome!,
+        Email = email!,
+        Perfil = perfil!,
+        Ativo = true
+    };
+
+    var hasher = new PasswordHasher<Usuario>();
+    usuario.SenhaHash = hasher.HashPassword(usuario, request.Senha);
+
+    contexto.Usuarios.Add(usuario);
+    try
+    {
+        await contexto.SaveChangesAsync();
+    }
+    catch (DbUpdateException ex) when (ErroDeChaveDuplicada(ex))
+    {
+        return Results.Conflict(new { mensagem = "Este e-mail já está cadastrado nesta empresa." });
+    }
+
+    var resposta = new UsuarioResponse
+    {
+        Id = usuario.Id,
+        EmpresaId = usuario.EmpresaId,
+        Nome = usuario.Nome,
+        Email = usuario.Email,
+        Perfil = usuario.Perfil,
+        Ativo = usuario.Ativo
+    };
+
+    return Results.Created($"/usuarios/{usuario.Id}", resposta);
+})
+.WithName("CadastrarUsuario")
+.RequireAuthorization("SomenteAdminGeral");
+
 app.Run();
 
 // Remove espaços e transforma texto vazio em null
