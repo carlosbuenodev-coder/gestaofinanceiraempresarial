@@ -73,7 +73,13 @@ builder.Services
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy("SomenteAdminGeral", politica =>
         politica.RequireAuthenticatedUser()
-                .RequireRole("ADMIN_GERAL"));
+                .RequireRole("ADMIN_GERAL"))
+    .AddPolicy("UsuarioEmpresa", politica =>
+        politica.RequireAuthenticatedUser()
+                .RequireRole("ADMIN", "FINANCEIRO", "CONSULTA"))
+    .AddPolicy("AdminEmpresa", politica =>
+        politica.RequireAuthenticatedUser()
+                .RequireRole("ADMIN"));
 
 builder.Services.AddOpenApi();
 
@@ -166,6 +172,170 @@ app.MapPost("/auth/admin/login", async (
 })
 .AllowAnonymous()
 .WithName("LoginAdministradorGeral");
+
+// Login de usuário de empresa: a empresa faz parte da identidade de acesso.
+// Credenciais inválidas, empresa inativa ou usuário inativo recebem 401.
+app.MapPost("/auth/usuarios/login", async (
+    LoginUsuarioEmpresaRequest request,
+    GestaoFinanceiraContext contexto) =>
+{
+    if (request.EmpresaId <= 0 ||
+        string.IsNullOrWhiteSpace(request.Email) ||
+        string.IsNullOrEmpty(request.Senha))
+        return Results.Unauthorized();
+
+    var email = request.Email.Trim();
+
+    var usuario = await contexto.Usuarios.AsNoTracking()
+        .FirstOrDefaultAsync(u =>
+            u.EmpresaId == request.EmpresaId &&
+            u.Email == email &&
+            u.Ativo);
+
+    if (usuario is null)
+        return Results.Unauthorized();
+
+    var empresaAtiva = await contexto.Empresas.AsNoTracking()
+        .AnyAsync(e => e.Id == usuario.EmpresaId && e.Ativo);
+
+    if (!empresaAtiva)
+        return Results.Unauthorized();
+
+    var verificador = new PasswordHasher<Usuario>();
+    var resultado = verificador.VerifyHashedPassword(
+        usuario, usuario.SenhaHash, request.Senha);
+
+    if (resultado == PasswordVerificationResult.Failed)
+        return Results.Unauthorized();
+
+    if (usuario.Perfil is not ("ADMIN" or "FINANCEIRO" or "CONSULTA"))
+        return Results.Unauthorized();
+
+    var agora = DateTime.UtcNow;
+    var expiraEm = agora.AddHours(1);
+
+    var claims = new[]
+    {
+        new Claim(JwtRegisteredClaimNames.Sub, usuario.Id.ToString()),
+        new Claim(JwtRegisteredClaimNames.Email, usuario.Email),
+        new Claim(ClaimTypes.Role, usuario.Perfil),
+        new Claim("empresa_id", usuario.EmpresaId.ToString()),
+        new Claim("tipo_usuario", "EMPRESA"),
+        new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+    };
+
+    var token = new JwtSecurityToken(
+        issuer: emissorJwt,
+        audience: publicoJwt,
+        claims: claims,
+        notBefore: agora,
+        expires: expiraEm,
+        signingCredentials: new SigningCredentials(
+            new SymmetricSecurityKey(chaveJwt),
+            SecurityAlgorithms.HmacSha256));
+
+    return Results.Ok(new
+    {
+        token = new JwtSecurityTokenHandler().WriteToken(token),
+        tipo = "Bearer",
+        expiraEmUtc = expiraEm,
+        usuario = new UsuarioResponse
+        {
+            Id = usuario.Id,
+            EmpresaId = usuario.EmpresaId,
+            Nome = usuario.Nome,
+            Email = usuario.Email,
+            Perfil = usuario.Perfil,
+            Ativo = usuario.Ativo
+        }
+    });
+})
+.AllowAnonymous()
+.WithName("LoginUsuarioEmpresa");
+
+// O usuário consulta apenas seu próprio cadastro.
+// Os IDs são retirados do JWT, nunca de parâmetros enviados pelo cliente.
+// Também conferimos a situação atual do usuário e da empresa no banco.
+app.MapGet("/usuarios/me", async (
+    ClaimsPrincipal principal,
+    GestaoFinanceiraContext contexto) =>
+{
+    var idTexto = principal.FindFirstValue(JwtRegisteredClaimNames.Sub)
+        ?? principal.FindFirstValue(ClaimTypes.NameIdentifier);
+    var empresaTexto = principal.FindFirstValue("empresa_id");
+
+    if (!long.TryParse(idTexto, out var usuarioId) ||
+        !long.TryParse(empresaTexto, out var empresaId) ||
+        principal.FindFirstValue("tipo_usuario") != "EMPRESA")
+        return Results.Forbid();
+
+    var usuario = await contexto.Usuarios.AsNoTracking()
+        .FirstOrDefaultAsync(u =>
+            u.Id == usuarioId && u.EmpresaId == empresaId && u.Ativo);
+
+    if (usuario is null ||
+        !await contexto.Empresas.AsNoTracking()
+            .AnyAsync(e => e.Id == empresaId && e.Ativo) ||
+        usuario.Perfil != principal.FindFirstValue(ClaimTypes.Role))
+        return Results.Forbid();
+
+    return Results.Ok(new UsuarioResponse
+    {
+        Id = usuario.Id,
+        EmpresaId = usuario.EmpresaId,
+        Nome = usuario.Nome,
+        Email = usuario.Email,
+        Perfil = usuario.Perfil,
+        Ativo = usuario.Ativo
+    });
+})
+.WithName("MeuUsuario")
+.RequireAuthorization("UsuarioEmpresa");
+
+// ADMIN da empresa lista apenas os usuários da empresa indicada no JWT.
+// O administrador geral continua separado e não usa este endpoint.
+app.MapGet("/usuarios/minha-empresa", async (
+    ClaimsPrincipal principal,
+    GestaoFinanceiraContext contexto) =>
+{
+    var idTexto = principal.FindFirstValue(JwtRegisteredClaimNames.Sub)
+        ?? principal.FindFirstValue(ClaimTypes.NameIdentifier);
+    var empresaTexto = principal.FindFirstValue("empresa_id");
+
+    if (!long.TryParse(idTexto, out var usuarioId) ||
+        !long.TryParse(empresaTexto, out var empresaId) ||
+        principal.FindFirstValue("tipo_usuario") != "EMPRESA")
+        return Results.Forbid();
+
+    var adminValido = await contexto.Usuarios.AsNoTracking()
+        .AnyAsync(u => u.Id == usuarioId &&
+                       u.EmpresaId == empresaId &&
+                       u.Ativo && u.Perfil == "ADMIN");
+
+    var empresaAtiva = await contexto.Empresas.AsNoTracking()
+        .AnyAsync(e => e.Id == empresaId && e.Ativo);
+
+    if (!adminValido || !empresaAtiva)
+        return Results.Forbid();
+
+    var usuarios = await contexto.Usuarios.AsNoTracking()
+        .Where(u => u.EmpresaId == empresaId)
+        .OrderBy(u => u.Id)
+        .Select(u => new UsuarioResponse
+        {
+            Id = u.Id,
+            EmpresaId = u.EmpresaId,
+            Nome = u.Nome,
+            Email = u.Email,
+            Perfil = u.Perfil,
+            Ativo = u.Ativo
+        })
+        .ToListAsync();
+
+    return Results.Ok(usuarios);
+})
+.WithName("ListarUsuariosMinhaEmpresa")
+.RequireAuthorization("AdminEmpresa");
 
 // Endpoint original de previsão do tempo
 var summaries = new[]
@@ -638,3 +808,7 @@ record WeatherForecast(
 
 // DTO do login; não contém a entidade ou o hash.
 record LoginAdministradorRequest(string Email, string Senha);
+
+
+// Dados exigidos no login de usuário da empresa.
+record LoginUsuarioEmpresaRequest(long EmpresaId, string Email, string Senha);
