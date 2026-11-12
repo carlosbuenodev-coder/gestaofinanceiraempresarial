@@ -18,3 +18,53 @@ appsettings.Development.json
 
 # Arquivos temporários
 *.log
+
+# Segredos protegidos e arquivos temporários locais
+*.dpapi
+*.dpapi.*
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.env
+.env.*
+*.env
+*.env.*
+secrets.json
+secrets.*.json
+appsettings.Local.json
+appsettings.*.local.json
+credentials.json
+credentials.*.json
+*.secrets.json
+
+# Certificados, chaves privadas e cofres locais
+*.pfx
+*.p12
+*.pem
+*.key
+*.cer
+*.crt
+*.der
+*.jks
+*.keystore
+*.kdbx
+id_rsa*
+id_ed25519*
+.my.cnf
+.mylogin.cnf
+.mysql_history
+.mysqlsh/
+*.dump
+*.dmp
+
+# Cache Python (incluindo ferramentas MySQL Shell)
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Ferramentas administrativas exclusivas do ambiente local
+/scripts/mysql_security.py
+/scripts/inspect_mysql.py
+/scripts/open_admin_session.py

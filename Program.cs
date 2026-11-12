@@ -10,11 +10,18 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using MySql.Data.MySqlClient;
 using System.ComponentModel.DataAnnotations;
+using GestaoFinanceira.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var connectionString = builder.Configuration
-    .GetConnectionString("GestaoFinanceira");
+var testing = builder.Environment.IsEnvironment("Testing");
+if (args.Contains("--security-tests") && !testing)
+    throw new InvalidOperationException("Testes de segurança exigem o ambiente Testing.");
+
+// Testing never falls back to the Development connection or JWT.
+var connectionString = testing
+    ? Environment.GetEnvironmentVariable("Testing__ConnectionString")
+    : builder.Configuration.GetConnectionString("GestaoFinanceira");
 
 if (string.IsNullOrWhiteSpace(connectionString))
 {
@@ -22,13 +29,21 @@ if (string.IsNullOrWhiteSpace(connectionString))
         "A conexão GestaoFinanceira não foi configurada.");
 }
 
+await DatabaseSafety.VerifyAsync(connectionString, testing);
+if (testing)
+    builder.WebHost.UseUrls("http://localhost:5217");
+
 builder.Services.AddDbContext<GestaoFinanceiraContext>(options =>
 {
     options.UseMySQL(connectionString);
+    if (testing)
+        options.AddInterceptors(new TestingWriteGuard());
 });
 
 // A chave JWT permanece no User Secrets; nunca no repositório.
-var chaveJwtBase64 = builder.Configuration["Jwt:Key"];
+var chaveJwtBase64 = testing
+    ? Environment.GetEnvironmentVariable("Testing__JwtKey")
+    : builder.Configuration["Jwt:Key"];
 if (string.IsNullOrWhiteSpace(chaveJwtBase64))
 {
     throw new InvalidOperationException("A chave Jwt:Key não foi configurada.");
@@ -49,8 +64,8 @@ if (chaveJwt.Length < 32)
     throw new InvalidOperationException("A chave Jwt:Key deve ter pelo menos 32 bytes.");
 }
 
-const string emissorJwt = "GestaoFinanceiraAPI";
-const string publicoJwt = "GestaoFinanceiraAPI";
+var emissorJwt = testing ? "GestaoFinanceiraAPI.Testing" : "GestaoFinanceiraAPI";
+var publicoJwt = emissorJwt;
 
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -638,7 +653,223 @@ app.MapPost("/usuarios", async (
 .WithName("CadastrarUsuario")
 .RequireAuthorization("SomenteAdminGeral");
 
-app.Run();
+
+// CRUD de usuários: o administrador geral administra todas as empresas;
+// o ADMIN de empresa administra apenas FINANCEIRO e CONSULTA de sua empresa.
+app.MapGet("/usuarios/{id:long}", async (
+    long id,
+    ClaimsPrincipal principal,
+    GestaoFinanceiraContext contexto) =>
+{
+    // Administrador geral pode consultar usuários de qualquer empresa.
+    if (principal.IsInRole("ADMIN_GERAL") &&
+        principal.FindFirstValue("tipo_usuario") != "EMPRESA")
+    {
+        var usuarioGeral = await contexto.Usuarios
+            .AsNoTracking()
+            .FirstOrDefaultAsync(u => u.Id == id);
+
+        return usuarioGeral is null
+            ? Results.NotFound()
+            : Results.Ok(RespostaUsuario(usuarioGeral));
+    }
+
+    // Somente ADMIN ativo pode consultar usuários da própria empresa.
+    if (!await AdminEmpresaAtual(principal, contexto))
+        return Results.Forbid();
+
+    if (!long.TryParse(
+        principal.FindFirstValue("empresa_id"),
+        out var empresaId))
+        return Results.Forbid();
+
+    var usuario = await contexto.Usuarios
+        .AsNoTracking()
+        .FirstOrDefaultAsync(u =>
+            u.Id == id &&
+            u.EmpresaId == empresaId);
+
+    return usuario is null
+        ? Results.NotFound()
+        : Results.Ok(RespostaUsuario(usuario));
+})
+.RequireAuthorization();
+
+app.MapPost("/usuarios/minha-empresa", async (CriarUsuarioEmpresaRequest request,
+    ClaimsPrincipal principal, GestaoFinanceiraContext contexto) =>
+{
+    if (!await AdminEmpresaAtual(principal, contexto))
+        return Results.Forbid();
+    if (!long.TryParse(principal.FindFirstValue("empresa_id"), out var empresaId))
+        return Results.Forbid();
+
+    var nome = request.Nome?.Trim();
+    var email = request.Email?.Trim();
+    var perfil = request.Perfil?.Trim().ToUpperInvariant();
+    var erros = ValidarDadosUsuario(nome, email, perfil, request.Senha, true);
+    if (perfil == "ADMIN") erros["perfil"] = new[] { "Somente o administrador geral pode cadastrar ADMIN." };
+    if (erros.Count > 0) return Results.ValidationProblem(erros);
+
+    if (await contexto.Usuarios.AnyAsync(u => u.EmpresaId == empresaId && u.Email == email))
+        return Results.Conflict(new { mensagem = "E-mail já cadastrado nesta empresa." });
+
+    var usuario = new Usuario { EmpresaId = empresaId, Nome = nome!, Email = email!,
+        Perfil = perfil!, Ativo = true };
+    usuario.SenhaHash = new PasswordHasher<Usuario>().HashPassword(usuario, request.Senha!);
+    contexto.Usuarios.Add(usuario);
+    try { await contexto.SaveChangesAsync(); }
+    catch (DbUpdateException ex) when (ErroDeChaveDuplicada(ex))
+    { return Results.Conflict(new { mensagem = "E-mail já cadastrado nesta empresa." }); }
+    return Results.Created($"/usuarios/{usuario.Id}", RespostaUsuario(usuario));
+}).RequireAuthorization("AdminEmpresa");
+
+app.MapPut("/usuarios/{id:long}", async (long id, AtualizarUsuarioRequest request,
+    ClaimsPrincipal principal, GestaoFinanceiraContext contexto) =>
+{
+    var usuariosPermitidos = await UsuariosNoEscopoAdministrativo(principal, contexto);
+    if (usuariosPermitidos is null) return Results.Forbid();
+
+    var usuario = await usuariosPermitidos.FirstOrDefaultAsync(u => u.Id == id);
+    if (usuario is null) return Results.NotFound();
+    if (!await PodeAdministrarUsuario(principal, contexto, usuario.EmpresaId, usuario.Perfil))
+        return Results.Forbid();
+
+    var geral = principal.IsInRole("ADMIN_GERAL");
+    var perfil = request.Perfil?.Trim().ToUpperInvariant();
+    var nome = request.Nome?.Trim();
+    var email = request.Email?.Trim();
+    var erros = ValidarDadosUsuario(nome, email, perfil, request.Senha, false);
+    if (!geral && perfil == "ADMIN")
+        erros["perfil"] = new[] { "Somente o administrador geral pode definir ADMIN." };
+    if (erros.Count > 0) return Results.ValidationProblem(erros);
+
+    if (await contexto.Usuarios.AnyAsync(u => u.EmpresaId == usuario.EmpresaId &&
+        u.Email == email && u.Id != id))
+        return Results.Conflict(new { mensagem = "E-mail já cadastrado nesta empresa." });
+
+    usuario.Nome = nome!;
+    usuario.Email = email!;
+    usuario.Perfil = perfil!;
+    if (!string.IsNullOrEmpty(request.Senha))
+        usuario.SenhaHash = new PasswordHasher<Usuario>().HashPassword(usuario, request.Senha);
+    try { await contexto.SaveChangesAsync(); }
+    catch (DbUpdateException ex) when (ErroDeChaveDuplicada(ex))
+    { return Results.Conflict(new { mensagem = "E-mail já cadastrado nesta empresa." }); }
+    return Results.Ok(RespostaUsuario(usuario));
+}).RequireAuthorization();
+
+// Desativação lógica: não exclui registros nem compromete referências financeiras.
+app.MapPatch("/usuarios/{id:long}/desativar", async (long id,
+    ClaimsPrincipal principal, GestaoFinanceiraContext contexto) =>
+{
+    var usuariosPermitidos = await UsuariosNoEscopoAdministrativo(principal, contexto);
+    if (usuariosPermitidos is null) return Results.Forbid();
+
+    var usuario = await usuariosPermitidos.FirstOrDefaultAsync(u => u.Id == id);
+    if (usuario is null) return Results.NotFound();
+    if (!await PodeAdministrarUsuario(principal, contexto, usuario.EmpresaId, usuario.Perfil))
+        return Results.Forbid();
+    usuario.Ativo = false;
+    await contexto.SaveChangesAsync();
+    return Results.Ok(RespostaUsuario(usuario));
+}).RequireAuthorization();
+
+if (testing && args.Contains("--security-tests"))
+{
+    try
+    {
+        await app.StartAsync();
+        await TestingScenario.RunAsync(app.Services);
+    }
+    catch
+    {
+        Console.WriteLine("[FALHOU] Execução interrompida; detalhes sensíveis omitidos.");
+        Environment.ExitCode = 1;
+    }
+    finally
+    {
+        await app.StopAsync();
+        await app.DisposeAsync();
+    }
+}
+else
+{
+    app.Run();
+}
+
+
+static UsuarioResponse RespostaUsuario(Usuario u) => new()
+{
+    Id = u.Id, EmpresaId = u.EmpresaId, Nome = u.Nome,
+    Email = u.Email, Perfil = u.Perfil, Ativo = u.Ativo
+};
+
+static Dictionary<string, string[]> ValidarDadosUsuario(string? nome, string? email,
+    string? perfil, string? senha, bool exigirSenha)
+{
+    var erros = new Dictionary<string, string[]>();
+    if (string.IsNullOrWhiteSpace(nome) || nome.Length > 120)
+        erros["nome"] = new[] { "Nome obrigatório, até 120 caracteres." };
+    if (string.IsNullOrWhiteSpace(email) || email.Length > 150 ||
+        !new EmailAddressAttribute().IsValid(email))
+        erros["email"] = new[] { "E-mail inválido ou maior que 150 caracteres." };
+    if (perfil is not ("ADMIN" or "FINANCEIRO" or "CONSULTA"))
+        erros["perfil"] = new[] { "Perfil deve ser ADMIN, FINANCEIRO ou CONSULTA." };
+    if ((exigirSenha || !string.IsNullOrEmpty(senha)) && (senha?.Length ?? 0) < 12)
+        erros["senha"] = new[] { "Senha deve ter pelo menos 12 caracteres." };
+    return erros;
+}
+
+static async Task<bool> AdminEmpresaAtual(ClaimsPrincipal principal,
+    GestaoFinanceiraContext contexto)
+{
+    if (principal.FindFirstValue("tipo_usuario") != "EMPRESA" ||
+        !principal.IsInRole("ADMIN") ||
+        !long.TryParse(principal.FindFirstValue("empresa_id"), out var empresaId) ||
+        !long.TryParse(principal.FindFirstValue(JwtRegisteredClaimNames.Sub)
+            ?? principal.FindFirstValue(ClaimTypes.NameIdentifier), out var usuarioId))
+        return false;
+    return await contexto.Usuarios.AsNoTracking().AnyAsync(u => u.Id == usuarioId &&
+        u.EmpresaId == empresaId && u.Perfil == "ADMIN" && u.Ativo) &&
+        await contexto.Empresas.AsNoTracking().AnyAsync(e => e.Id == empresaId && e.Ativo);
+}
+
+static async Task<IQueryable<Usuario>?> UsuariosNoEscopoAdministrativo(
+    ClaimsPrincipal principal,
+    GestaoFinanceiraContext contexto)
+{
+    if (principal.IsInRole("ADMIN_GERAL") &&
+        principal.FindFirstValue("tipo_usuario") != "EMPRESA")
+    {
+        return contexto.Usuarios;
+    }
+
+    if (!await AdminEmpresaAtual(principal, contexto))
+        return null;
+
+    if (!long.TryParse(
+        principal.FindFirstValue("empresa_id"),
+        out var empresaId))
+    {
+        return null;
+    }
+
+    return contexto.Usuarios
+        .Where(u => u.EmpresaId == empresaId);
+}
+
+static async Task<bool> PodeAdministrarUsuario(ClaimsPrincipal principal,
+    GestaoFinanceiraContext contexto, long empresaId, string perfilAlvo)
+{
+    if (principal.IsInRole("ADMIN_GERAL") &&
+        principal.FindFirstValue("tipo_usuario") != "EMPRESA")
+        return true;
+    if (perfilAlvo == "ADMIN" ||
+        !long.TryParse(principal.FindFirstValue("empresa_id"), out var empresaToken) ||
+        empresaToken != empresaId)
+        return false;
+    return await AdminEmpresaAtual(principal, contexto);
+}
 
 // Remove espaços e transforma texto vazio em null
 static string? NormalizarOpcional(string? valor)
@@ -812,3 +1043,6 @@ record LoginAdministradorRequest(string Email, string Senha);
 
 // Dados exigidos no login de usuário da empresa.
 record LoginUsuarioEmpresaRequest(long EmpresaId, string Email, string Senha);
+
+record CriarUsuarioEmpresaRequest(string? Nome, string? Email, string? Senha, string? Perfil);
+record AtualizarUsuarioRequest(string? Nome, string? Email, string? Perfil, string? Senha);
