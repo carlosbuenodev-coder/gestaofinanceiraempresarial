@@ -11,6 +11,7 @@ using Microsoft.IdentityModel.Tokens;
 using MySql.Data.MySqlClient;
 using System.ComponentModel.DataAnnotations;
 using GestaoFinanceira.Security;
+using GestaoFinanceira.Endpoints;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -33,9 +34,14 @@ await DatabaseSafety.VerifyAsync(connectionString, testing);
 if (testing)
     builder.WebHost.UseUrls("http://localhost:5217");
 
+builder.Services.AddScoped<CadastroLancamentoService>();
+var auditFailure = testing && args.Contains("--security-tests") ? new AuditFailureInterceptor() : null;
+if (auditFailure is not null) builder.Services.AddSingleton(auditFailure);
 builder.Services.AddDbContext<GestaoFinanceiraContext>(options =>
 {
     options.UseMySQL(connectionString);
+    options.AddInterceptors(new FinancialWriteGuard(testing));
+    if (auditFailure is not null) options.AddInterceptors(auditFailure);
     if (testing)
         options.AddInterceptors(new TestingWriteGuard());
 });
@@ -125,6 +131,7 @@ if (app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
+app.MapLancamentos();
 
 // Login público: valida a senha sem devolver hash ou outros dados sensíveis.
 app.MapPost("/auth/admin/login", async (

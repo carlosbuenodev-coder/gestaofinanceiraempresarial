@@ -68,3 +68,11 @@ __pycache__/
 /scripts/mysql_security.py
 /scripts/inspect_mysql.py
 /scripts/open_admin_session.py
+
+# Ferramentas administrativas locais desta entrega
+/scripts/inspect_finance_local.py
+/scripts/provision_finance_local.py
+/scripts/verify_finance_local.py
+
+/scripts/inspect_post_local.py
+/scripts/provision_post_local.py

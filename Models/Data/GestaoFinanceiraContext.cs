@@ -14,12 +14,15 @@ namespace GestaoFinanceira.Data
         public DbSet<Empresa> Empresas { get; set; }
 
         public DbSet<Usuario> Usuarios { get; set; }
+        public DbSet<Lancamento> Lancamentos { get; set; }
     
         public DbSet<AdministradorGeral> AdministradoresGerais { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
+            modelBuilder.ApplyConfiguration(new LancamentoMapping());
+            CadastroFinanceiroMapping.Aplicar(modelBuilder);
 
             // Mapeamento da tabela empresas
             modelBuilder.Entity<Empresa>(entity =>

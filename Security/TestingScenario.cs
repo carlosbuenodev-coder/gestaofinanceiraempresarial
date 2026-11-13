@@ -19,9 +19,7 @@ public static class TestingScenario
         var db = scope.ServiceProvider.GetRequiredService<GestaoFinanceiraContext>();
         await db.Database.OpenConnectionAsync();
         await DatabaseSafety.VerifyOpenAsync(db.Database.GetDbConnection(), true);
-        if (await db.Empresas.AnyAsync() || await db.Usuarios.AnyAsync() || await db.AdministradoresGerais.AnyAsync())
-            throw new InvalidOperationException("Fixtures exigem banco de testes vazio; não há limpeza automática.");
-
+        var execution = Guid.NewGuid().ToString("N");
         var a = new Empresa { RazaoSocial = "Empresa Ficticia Seguranca A", Ativo = true };
         var b = new Empresa { RazaoSocial = "Empresa Ficticia Seguranca B", Ativo = true };
         db.Empresas.AddRange(a, b);
@@ -30,7 +28,7 @@ public static class TestingScenario
         Usuario Add(Empresa company, string label, string role)
         {
             var user = new Usuario { EmpresaId = company.Id, Nome = "Ficticio " + label,
-                Email = label + "@seguranca.invalid", Perfil = role, Ativo = true };
+                Email = label + "-" + execution + "@seguranca.invalid", Perfil = role, Ativo = true };
             user.SenhaHash = new PasswordHasher<Usuario>().HashPassword(user, password);
             db.Usuarios.Add(user);
             return user;
@@ -42,7 +40,7 @@ public static class TestingScenario
         var financeB = Add(b, "financeiro-b", "FINANCEIRO");
         Add(b, "consulta-b", "CONSULTA");
         var geral = new AdministradorGeral { Nome = "Administrador Geral Ficticio",
-            Email = "geral@seguranca.invalid", Ativo = true };
+            Email = "geral-" + execution + "@seguranca.invalid", Ativo = true };
         geral.SenhaHash = new PasswordHasher<AdministradorGeral>().HashPassword(geral, password);
         db.AdministradoresGerais.Add(geral);
         await db.SaveChangesAsync();
@@ -87,6 +85,18 @@ public static class TestingScenario
         var tokenGeral = geralJson.RootElement.GetProperty("token").GetString() ?? throw new InvalidOperationException();
         Console.WriteLine("[OK] Login ADMIN_GERAL: HTTP 200 (JWT omitido)");
 
+        await FinanceTestingScenario.RunAsync(db, http, a.Id, b.Id, tokenA, tokenFinance, tokenConsulta, tokenB, tokenGeral);
+        await PostLancamentosTestingScenario.RunAsync(services, db, http, a.Id, b.Id,
+            adminA.Id, financeA.Id, geral.Id, tokenA, tokenFinance, tokenConsulta, tokenGeral);
+        var postBody = new CriarLancamentoRequest("RECEITA", "Cadastro ficticio bloqueado", 1,
+            DataEmissao: new DateOnly(2026, 11, 1), DataVencimento: new DateOnly(2026, 11, 30), Valor: 1);
+
+
+        await Expect(HttpMethod.Get, "/empresas", tokenGeral, null, 200);
+        await Expect(HttpMethod.Get, $"/empresas/{a.Id}", tokenGeral, null, 200);
+        await Expect(HttpMethod.Get, "/empresas", tokenA, null, 403);
+        await Expect(HttpMethod.Get, "/empresas", null, null, 401);
+        await Expect(HttpMethod.Get, $"/usuarios/{financeA.Id}", tokenA, null, 200);
         object Body(Usuario u) => new { nome = "Ficticio Atualizado", email = u.Email, perfil = "CONSULTA" };
         const long missing = long.MaxValue;
         if (await db.Usuarios.AnyAsync(u => u.Id == missing)) throw new InvalidOperationException("ID não está ausente.");
@@ -128,6 +138,12 @@ public static class TestingScenario
         if (await db.Usuarios.AsNoTracking().AnyAsync(u => u.Id == consultaA.Id && u.Ativo))
             throw new InvalidOperationException("Desativação não persistiu.");
         var oldProfileFingerprint = await Fingerprint(db);
+        await Expect(HttpMethod.Post, "/lancamentos", tokenFinance, postBody, 403);
+        await Expect(HttpMethod.Post, "/lancamentos", tokenConsulta, postBody, 403);
+        await Expect(HttpMethod.Get, "/lancamentos", tokenFinance, null, 403);
+        await Expect(HttpMethod.Get, "/lancamentos", tokenConsulta, null, 403);
+        await Expect(HttpMethod.Get, $"/lancamentos/{long.MaxValue}", tokenFinance, null, 403);
+        await Expect(HttpMethod.Get, $"/lancamentos/{long.MaxValue}", tokenConsulta, null, 403);
         await Expect(HttpMethod.Get, "/usuarios/me", tokenFinance, null, 403);
         await Expect(HttpMethod.Get, "/usuarios/me", tokenConsulta, null, 403);
         if (oldProfileFingerprint != await Fingerprint(db)) throw new InvalidOperationException();
@@ -140,7 +156,19 @@ public static class TestingScenario
         if (finalB.Ativo || finalB.Nome != "Admin B Ficticio Atualizado" || finalB.EmpresaId != b.Id)
             throw new InvalidOperationException("Operações ADMIN_GERAL não persistiram.");
         await Expect(HttpMethod.Get, "/usuarios/me", tokenB, null, 403);
+        await Expect(HttpMethod.Post, "/lancamentos", tokenB, postBody, 403);
         Console.WriteLine("[OK] Operações permitidas persistidas somente em fixtures; bloqueios após desativação/rebaixamento confirmados.");
+        geral.Ativo = false;
+        await db.SaveChangesAsync();
+        await Expect(HttpMethod.Get, $"/lancamentos?empresaId={a.Id}", tokenGeral, null, 403);
+        await Expect(HttpMethod.Get, $"/lancamentos/{long.MaxValue}?empresaId={a.Id}", tokenGeral, null, 403);
+        await Expect(HttpMethod.Post, "/lancamentos", tokenGeral, postBody with { EmpresaId = a.Id }, 403);
+        a.Ativo = false;
+        await db.SaveChangesAsync();
+        await Expect(HttpMethod.Post, "/lancamentos", tokenA, postBody, 403);
+        await Expect(HttpMethod.Post, "/lancamentos", tokenGeral, postBody with { EmpresaId = a.Id }, 403);
+        await Expect(HttpMethod.Get, "/lancamentos", tokenA, null, 403);
+        await Expect(HttpMethod.Get, $"/lancamentos/{long.MaxValue}", tokenA, null, 403);
         Console.WriteLine("[OK] SECURITY_SCENARIO_COMPLETE — nenhum registro excluído.");
     }
 
