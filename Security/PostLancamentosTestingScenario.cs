@@ -126,23 +126,55 @@ public static class PostLancamentosTestingScenario
         Console.WriteLine("[OK] Falha de auditoria apos INSERT do lancamento: rollback integral confirmado por fingerprint das duas tabelas.");
         await Created(valid, financeiro, a, financeiroId, "EMPRESA");
         var beforeDev = await Snapshot(db);
-        var devService = new CadastroLancamentoService(db, new Microsoft.Extensions.Hosting.Internal.HostingEnvironment { EnvironmentName = "Development" });
+        var devService = new CadastroLancamentoService(db, new Microsoft.Extensions.Hosting.Internal.HostingEnvironment { EnvironmentName = "Production" });
         var deniedDev = await devService.CriarAsync(valid, new ClaimsPrincipal(), CancellationToken.None);
         if (deniedDev is not Microsoft.AspNetCore.Http.IStatusCodeHttpResult { StatusCode: 403 } || beforeDev != await Snapshot(db))
-            throw new InvalidOperationException("Bloqueio de Development incorreto.");
+            throw new InvalidOperationException("Bloqueio de Production incorreto.");
         checks++;
         var blockedOptions = new DbContextOptionsBuilder<GestaoFinanceiraContext>()
-            .UseMySQL(db.Database.GetConnectionString()!).AddInterceptors(new FinancialWriteGuard(false)).Options;
+            .UseMySQL(db.Database.GetConnectionString()!).AddInterceptors(new FinancialWriteGuard("Production")).Options;
         await using (var blockedDb = new GestaoFinanceiraContext(blockedOptions))
         {
             blockedDb.Lancamentos.Add(new Lancamento { EmpresaId = a });
             var refused = false;
             try { await blockedDb.SaveChangesAsync(); }
             catch (InvalidOperationException) { refused = true; }
-            if (!refused || beforeDev != await Snapshot(db)) throw new InvalidOperationException("Interceptor permitiu escrita fora de Testing.");
+            if (!refused || beforeDev != await Snapshot(db)) throw new InvalidOperationException("Interceptor permitiu escrita em Production.");
         }
         checks++;
-        Console.WriteLine($"[OK] POST_FINANCE_SCENARIO: {checks} casos aprovados, com auditoria, rollback e bloqueio de Development.");
+        var developmentIdentity = new ClaimsPrincipal(new ClaimsIdentity(new[] {
+            new Claim(ClaimTypes.NameIdentifier, adminId.ToString()), new Claim(ClaimTypes.Role, "ADMIN"),
+            new Claim("empresa_id", a.ToString()), new Claim("tipo_usuario", "EMPRESA") }, "Test"));
+        var developmentService = new CadastroLancamentoService(db,
+            new Microsoft.Extensions.Hosting.Internal.HostingEnvironment { EnvironmentName = "Development" });
+        var wrongDestinationRejected = false;
+        try { await developmentService.CriarAsync(valid, developmentIdentity, CancellationToken.None); }
+        catch (InvalidOperationException) { wrongDestinationRejected = true; }
+        if (!wrongDestinationRejected || beforeDev != await Snapshot(db))
+            throw new InvalidOperationException("Development aceitou conexao Testing.");
+        checks++;
+        foreach (var env in new[] { "Development", "Testing" })
+        {
+            foreach (var state in new[] { EntityState.Modified, EntityState.Deleted })
+            {
+                foreach (var audit in new[] { false, true })
+                {
+                    var options = new DbContextOptionsBuilder<GestaoFinanceiraContext>()
+                        .UseMySQL(db.Database.GetConnectionString()!).AddInterceptors(new FinancialWriteGuard(env)).Options;
+                    await using var guarded = new GestaoFinanceiraContext(options);
+                    object stub = audit ? new Auditoria { Id = long.MaxValue } : new Lancamento { Id = long.MaxValue };
+                    guarded.Entry(stub).State = state;
+                    var rejected = false;
+                    try { await guarded.SaveChangesAsync(); }
+                    catch (InvalidOperationException ex) when (ex.Message.Contains("Somente")) { rejected = true; }
+                    if (!rejected || guarded.Database.GetDbConnection().State != System.Data.ConnectionState.Closed)
+                        throw new InvalidOperationException("UPDATE/DELETE nao foi bloqueado antes do SQL.");
+                    checks++;
+                }
+            }
+        }
+        if (beforeDev != await Snapshot(db)) throw new InvalidOperationException("Verificacoes de bloqueio alteraram dados.");
+        Console.WriteLine($"[OK] POST_FINANCE_SCENARIO: {checks} casos aprovados, com auditoria, rollback, isolamento de ambientes e bloqueio de UPDATE/DELETE.");
     }
 
     private static async Task<string> Snapshot(GestaoFinanceiraContext db)

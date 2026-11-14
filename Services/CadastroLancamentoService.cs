@@ -1,4 +1,4 @@
-﻿using System.Security.Claims;
+using System.Security.Claims;
 using System.Text.Json;
 using GestaoFinanceira.Data;
 using GestaoFinanceira.Models;
@@ -11,18 +11,18 @@ public sealed class CadastroLancamentoService(GestaoFinanceiraContext db, IHostE
 {
     public async Task<IResult> CriarAsync(CriarLancamentoRequest request, ClaimsPrincipal principal, CancellationToken ct)
     {
-        // This delivery permits financial writes exclusively in the isolated Testing database.
-        if (!environment.IsEnvironment("Testing"))
-            return Results.Problem("Cadastro financeiro disponível somente em Testing nesta entrega.", statusCode: 403);
+        var testing = environment.IsEnvironment("Testing");
+        if (!testing && !environment.IsDevelopment())
+            return Results.Problem("Cadastro financeiro permitido apenas em Development e Testing.", statusCode: 403);
         var perfil = principal.FindFirstValue(ClaimTypes.Role);
         if (perfil is not ("ADMIN" or "FINANCEIRO" or "ADMIN_GERAL")) return Results.Forbid();
         if (perfil != "ADMIN_GERAL" && request.EmpresaId.HasValue)
             return Results.BadRequest(new { mensagem = "Usuário empresarial não pode informar empresaId." });
         var erros = request.Validar();
         if (erros.Count > 0) return Results.ValidationProblem(erros);
-        await DatabaseSafety.VerifyAsync(db.Database.GetConnectionString()!, true);
+        await DatabaseSafety.VerifyAsync(db.Database.GetConnectionString()!, testing);
         await db.Database.OpenConnectionAsync(ct);
-        await DatabaseSafety.VerifyOpenAsync(db.Database.GetDbConnection(), true);
+        await DatabaseSafety.VerifyOpenAsync(db.Database.GetDbConnection(), testing);
         await using var transaction = await db.Database.BeginTransactionAsync(ct);
         var escopo = await EscopoFinanceiro.ResolverAsync(principal, request.EmpresaId, db, ct);
         if (escopo.Erro is not null) return escopo.Erro;

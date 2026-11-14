@@ -23,9 +23,10 @@ controle de acesso por perfil e empresa. O projeto está em desenvolvimento.
 | FINANCEIRO | Consulta e cadastra lançamentos na própria empresa. Consulta o próprio cadastro; não administra usuários. |
 | CONSULTA | Somente consulta lançamentos da própria empresa; não pode cadastrar lançamentos. Consulta o próprio cadastro; não administra usuários. |
 
-O cadastro financeiro está habilitado exclusivamente em Testing. Development permite
-somente consultas financeiras, com gravações bloqueadas pelo serviço, pelo interceptor
-e pelas permissões MySQL. As regras anteriores de administração de empresas e usuários
+O cadastro financeiro está habilitado em Development e Testing, com contas, bancos
+e chaves JWT separados. O serviço e o interceptor validam a conexão correspondente
+ao ambiente e permitem somente inclusão financeira; UPDATE e DELETE financeiros
+continuam bloqueados. As regras anteriores de administração de empresas e usuários
 permanecem preservadas. ADMIN_GERAL informa empresaId na query dos GETs e no corpo JSON
 do POST; usuários empresariais usam a empresa do JWT e não podem informar empresaId no POST.
 ADMIN_GERAL não utiliza os endpoints exclusivos de usuários empresariais.
@@ -59,8 +60,9 @@ e, para o inicializador publicado, Windows PowerShell com execução de scripts 
 | Testing | `http://localhost:5217` | `gestao_financeira_seguranca_testes` | `gestao_api_testing@localhost` |
 
 A configuracao atual exige MySQL em localhost:3306 e privilegios exatos por tabela.
-As tres tabelas de seguranca preservam SELECT, INSERT e UPDATE. Development pode
-somente ler lancamentos; Testing pode ler/inserir fixtures nas cinco tabelas financeiras.
+As tres tabelas de seguranca preservam SELECT, INSERT e UPDATE. Development tem
+SELECT/INSERT em lancamentos e auditoria e SELECT nas quatro tabelas auxiliares.
+Testing mantem SELECT/INSERT nessas seis tabelas para cadastro e novas fixtures.
 Nao ha privilegios globais, de schema ou concessao, nem papeis ativos.
 A API rejeita destino, identidade ou permissoes incompativeis. Root nao e usado pela API.
 Development lê `ConnectionStrings:GestaoFinanceira` e `Jwt:Key` dos mecanismos
@@ -140,11 +142,11 @@ saldo ou baixas. O detalhe devolve um DTO sem dados de autenticacao.
 Exemplo: `/lancamentos?tipo=RECEITA&status=ABERTO&vencimentoInicio=2026-01-01&pagina=1&tamanhoPagina=20`.
 Para ADMIN_GERAL, acrescente `empresaId` em lista e detalhe.
 
-Development tem somente SELECT financeiro em lancamentos. Testing tem SELECT/INSERT
-nas cinco tabelas financeiras e auditoria para fixtures e cadastro isolado. Consulte a matriz exata e o procedimento
+Development tem SELECT/INSERT em lancamentos e auditoria e somente SELECT nas tabelas
+auxiliares. Testing mantem SELECT/INSERT nas seis tabelas. Consulte a matriz exata e o procedimento
 seguro de execucao em [SECURITY_TESTING.md](SECURITY_TESTING.md).
 
-## Cadastro financeiro em Testing
+## Cadastro financeiro em Development e Testing
 
 `POST /lancamentos` retorna 201 com DTO e Location. ADMIN e FINANCEIRO usam a empresa
 do JWT; ADMIN_GERAL exige empresaId no JSON; CONSULTA não pode cadastrar.
@@ -165,6 +167,9 @@ atômicos, com autoria tipada para o administrador geral.
 ```
 
 O exemplo depende de categoria fictícia existente da mesma empresa e tipo em Testing.
-Development permanece sem escrita financeira, com bloqueio no serviço e no EF.
-Testing ganhou somente SELECT/INSERT em auditoria. As regras e testes estão descritos
+Os testes funcionais gravam somente novas fixtures em Testing. Em 2026-11-14,
+um único cadastro fictício expressamente autorizado em Development retornou 201
+(lançamento 9), com GET 200 e auditoria 1. Os oito lançamentos anteriores e os demais
+registros e estruturas foram preservados.
+UPDATE e DELETE financeiros permanecem bloqueados. As regras e testes estao descritos
 em [SECURITY_TESTING.md](SECURITY_TESTING.md).

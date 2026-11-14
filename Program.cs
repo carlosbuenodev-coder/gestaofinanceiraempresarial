@@ -40,7 +40,7 @@ if (auditFailure is not null) builder.Services.AddSingleton(auditFailure);
 builder.Services.AddDbContext<GestaoFinanceiraContext>(options =>
 {
     options.UseMySQL(connectionString);
-    options.AddInterceptors(new FinancialWriteGuard(testing));
+    options.AddInterceptors(new FinancialWriteGuard(builder.Environment.EnvironmentName));
     if (auditFailure is not null) options.AddInterceptors(auditFailure);
     if (testing)
         options.AddInterceptors(new TestingWriteGuard());

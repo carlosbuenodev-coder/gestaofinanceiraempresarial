@@ -9,12 +9,13 @@ O servidor permitido é localhost:3306. A API nunca usa root.
 | Tabelas | Development | Testing |
 |---|---|---|
 | empresas, usuarios, administradores_gerais | SELECT, INSERT, UPDATE | SELECT, INSERT, UPDATE |
-| lancamentos | SELECT | SELECT, INSERT |
-| auditoria | nenhum | SELECT, INSERT |
-| categorias, centros_custo, clientes, fornecedores | nenhum | SELECT, INSERT |
+| lancamentos | SELECT, INSERT | SELECT, INSERT |
+| auditoria | SELECT, INSERT | SELECT, INSERT |
+| categorias, centros_custo, clientes, fornecedores | SELECT | SELECT, INSERT |
 
 Os INSERT financeiros de Testing atendem fixtures e POST /lancamentos.
-Development permanece sem escrita financeira. Não há DELETE, DDL, GRANT OPTION,
+Development permite inclusão em lancamentos e auditoria, com SELECT nas referências.
+Não há UPDATE financeiro, DELETE, DDL, GRANT OPTION,
 privilégios globais, de schema, de coluna ou papéis ativos nas contas da API.
 DatabaseSafety exige igualdade entre privilégios reais e autorizados.
 TestingWriteGuard verifica a conexão antes de SaveChangesAsync e recusa exclusões.
@@ -78,16 +79,19 @@ final comparou dados e estruturas originais com o baseline privado sem exibir ha
 validou permissões exatas e negação de SELECT entre bancos e comparou as chaves JWT
 em memória. Nada dessa verificação transfere registros originais para Testing.
 
-Não execute migrações ou provisionamento no banco original. Não exponha segredos,
+Não execute migrações ou alterações estruturais no banco original. Concessões de
+permissões exigem autorização e devem corresponder à matriz exata. Não exponha segredos,
 hashes ou tokens em logs. Backups, configuração privada e recuperação administrativa
 permanecem sob responsabilidade do operador, fora do repositório.
 
 ## Cadastro de lançamentos (segunda entrega)
 
-`POST /lancamentos` está habilitado exclusivamente em Testing. Fora de Testing,
-o serviço devolve 403 antes de consultar ou gravar. O interceptor financeiro também
-bloqueia gravações EF fora de Testing e verifica destino, conta e permissões antes
-de cada SaveChangesAsync financeiro. Não houve concessão nova em Development.
+`POST /lancamentos` está habilitado em Development e Testing. Nos demais ambientes,
+o serviço e o interceptor recusam gravação financeira. Cada ambiente exige sua
+conexão, identidade MySQL e privilégios exatos, sem acesso cruzado. O interceptor
+recusa UPDATE/DELETE financeiros antes de abrir conexão e exige SaveChangesAsync.
+Development recebeu exclusivamente INSERT em lancamentos, SELECT/INSERT em auditoria
+e SELECT nas quatro tabelas auxiliares; as permissões anteriores foram preservadas.
 
 ADMIN e FINANCEIRO usam a empresa do JWT e não podem enviar empresaId.
 ADMIN_GERAL deve enviar empresaId no corpo JSON; CONSULTA recebe 403.
@@ -122,10 +126,52 @@ O cenário POST cobre cadastros pelos perfis autorizados, escopo de duas empresa
 referências e parâmetros inválidos, campos opcionais, status, consulta pelo Location,
 autoria empresarial e geral e rollback. O cenário principal verifica também o POST
 após revogação de perfil, inativação de usuário, empresa e administrador geral.
-O bloqueio Development é exercitado no serviço e no interceptor usando conexão
-Testing, sem tentar gravações no banco original.
+Os testes recusam uma conexão Testing apresentada como Development, bloqueiam escrita
+em Production e simulam estados Modified/Deleted no EF para ambas as entidades,
+em Development e Testing. O interceptor recusa esses estados antes de abrir conexão,
+sem emitir UPDATE ou DELETE. Nenhuma dessas verificações tenta gravar no banco original.
 
-Para habilitar cadastro em Development futuramente, será necessária uma entrega
-separada que autorize as mudanças no serviço/interceptor, nas permissões de leitura
-das referências e INSERT de lancamentos/auditoria e na matriz exata de DatabaseSafety,
-seguida de validação e plano operacional. Nada disso está habilitado nesta entrega.
+## Histórico da habilitação controlada em Development
+
+A preparação confirmou tipos, índices, chaves estrangeiras, categorias compatíveis e
+ausência de vínculos financeiros entre empresas diferentes. Não foi necessário alterar
+estruturas. O baseline privado original permaneceu idêntico, incluindo seus 8 lançamentos
+e nenhuma auditoria. Nenhuma permissão global, de schema ou concessão foi adicionada.
+
+A rodada funcional em Testing aprovou 59 verificações de consultas, 51 casos de
+cadastro/segurança e a regressão de autenticação, empresas e usuários. As fixtures
+anteriores foram verificadas por checkpoint privado, sem exibir hashes ou dados.
+Development iniciou com gestao_api_dev e passou por 9 verificações GET de conexão,
+consulta, isolamento, autenticação e OpenAPI. O POST está registrado e habilitado,
+mas não foi executado em Development, por restrição explícita desta entrega.
+
+A inicialização normal não grava dados, cria tabelas ou aplica migrações. As gravações
+de fixtures continuam restritas ao modo explícito --security-tests em Testing.
+O comando anterior --criar-admin-geral é uma operação separada, explícita, e não foi
+executado nesta habilitação. Não houve implantação pública, commit ou push.
+
+## Validação do cadastro autorizado em Development — 2026-11-14
+
+A retomada confirmou as permissões exatas das duas contas, a negação de acesso cruzado,
+as chaves JWT distintas e a preservação do baseline original antes da inclusão. Nenhuma
+estrutura ou permissão foi alterada. O ADMIN ativo da empresa 1 autenticou pelo fluxo
+normal; a sessão protegida foi validada por GET /usuarios/me, sem exposição do JWT.
+
+Após confirmar empresa ativa, categoria 4 da mesma empresa e tipo DESPESA e ausência
+de duplicidade, foi executado exatamente um POST /lancamentos em Development. O
+cadastro fictício autorizado retornou HTTP 201, ID 9, e GET /lancamentos/9 retornou
+HTTP 200 com os dados esperados e status ABERTO. A auditoria ID 1 confirmou empresa 1,
+usuário 1, entidade lancamentos, registro 9 e operação CRIAR.
+
+A comparação de todos os registros e estruturas antes/depois confirmou os oito
+lançamentos anteriores inalterados e somente duas novas linhas em Development:
+o lançamento e sua auditoria. O lançamento de teste foi mantido.
+
+A regressão desta retomada executou em Testing 59 verificações HTTP de consultas,
+51 casos de cadastro/segurança e 56 verificações HTTP de autenticação e endpoints
+anteriores: 166 verificações aprovadas, nenhuma reprovada. Os checkpoints confirmaram
+a preservação das fixtures anteriores. O build passou sem erros ou avisos; a execução
+HTTP local emitiu o aviso de porta HTTPS não determinada.
+
+Testes de carga e implantação com HTTPS exigem preparação própria. As ferramentas
+privadas, credenciais, JWTs e checkpoints cifrados permanecem fora dos arquivos publicados.

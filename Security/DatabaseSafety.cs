@@ -61,14 +61,13 @@ public static class DatabaseSafety
         foreach (var table in new[] { "empresas", "usuarios", "administradores_gerais" })
             foreach (var privilege in new[] { "SELECT", "INSERT", "UPDATE" })
                 expected.Add(database + "/" + table + "/" + privilege + "/NO");
-        expected.Add(database + "/lancamentos/SELECT/NO");
-        if (testing)
+        foreach (var table in new[] { "lancamentos", "auditoria" })
+            foreach (var privilege in new[] { "SELECT", "INSERT" })
+                expected.Add(database + "/" + table + "/" + privilege + "/NO");
+        foreach (var table in new[] { "categorias", "centros_custo", "clientes", "fornecedores" })
         {
-            expected.Add(database + "/auditoria/SELECT/NO");
-            expected.Add(database + "/auditoria/INSERT/NO");
-            foreach (var table in new[] { "categorias", "centros_custo", "clientes", "fornecedores", "lancamentos" })
-                foreach (var privilege in table == "lancamentos" ? new[] { "INSERT" } : new[] { "SELECT", "INSERT" })
-                    expected.Add(database + "/" + table + "/" + privilege + "/NO");
+            expected.Add(database + "/" + table + "/SELECT/NO");
+            if (testing) expected.Add(database + "/" + table + "/INSERT/NO");
         }
         await using (var command = connection.CreateCommand())
         {

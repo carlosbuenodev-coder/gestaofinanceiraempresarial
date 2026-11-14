@@ -4,27 +4,31 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace GestaoFinanceira.Security;
 
-public sealed class FinancialWriteGuard(bool testing) : SaveChangesInterceptor
+public sealed class FinancialWriteGuard(string environmentName) : SaveChangesInterceptor
 {
     private static bool HasFinancialChanges(DbContext? db) => db is not null && db.ChangeTracker.Entries()
-        .Any(e => e.Entity is Lancamento or Auditoria && e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted);
+        .Any(e => (e.Entity is Lancamento or Auditoria) && (e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted));
     public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)
     {
-        if (HasFinancialChanges(eventData.Context)) throw new InvalidOperationException("Gravação financeira exige verificação assíncrona em Testing.");
+        if (HasFinancialChanges(eventData.Context)) throw new InvalidOperationException("Gravação financeira exige verificação assíncrona do ambiente e da conexão.");
         return result;
     }
     public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(DbContextEventData eventData,
         InterceptionResult<int> result, CancellationToken cancellationToken = default)
     {
         if (!HasFinancialChanges(eventData.Context)) return result;
-        if (!testing) throw new InvalidOperationException("Gravação financeira bloqueada fora de Testing.");
+        var testing = environmentName == "Testing";
+        if (!testing && environmentName != "Development")
+            throw new InvalidOperationException("Gravação financeira permitida apenas em Development e Testing.");
         var db = eventData.Context!;
-        await DatabaseSafety.VerifyAsync(db.Database.GetConnectionString()!, true);
+        // Reject UPDATE and DELETE before opening a connection or issuing any SQL.
+        if (db.ChangeTracker.Entries().Any(e => (e.Entity is Lancamento or Auditoria) &&
+            (e.State is EntityState.Modified or EntityState.Deleted)))
+            throw new InvalidOperationException("Somente inclusão financeira é permitida.");
+        await DatabaseSafety.VerifyAsync(db.Database.GetConnectionString()!, testing);
         if (db.Database.GetDbConnection().State != System.Data.ConnectionState.Open)
             await db.Database.OpenConnectionAsync(cancellationToken);
-        await DatabaseSafety.VerifyOpenAsync(db.Database.GetDbConnection(), true);
-        if (db.ChangeTracker.Entries().Any(e => e.Entity is Lancamento or Auditoria && e.State != EntityState.Unchanged && e.State != EntityState.Added))
-            throw new InvalidOperationException("Somente inclusão financeira é permitida.");
+        await DatabaseSafety.VerifyOpenAsync(db.Database.GetDbConnection(), testing);
         return result;
     }
 }
