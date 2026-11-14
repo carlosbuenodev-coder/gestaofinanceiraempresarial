@@ -17,6 +17,16 @@ public static class LancamentosEndpoints
     public static void MapLancamentos(this WebApplication app)
     {
         var grupo = app.MapGroup("/lancamentos").RequireAuthorization();
+        grupo.MapPut("/{id:long}", async (long id, AtualizarLancamentoRequest request,
+            HttpRequest http, ClaimsPrincipal principal, AlteracaoLancamentoService service, CancellationToken ct) =>
+            http.Query.ContainsKey("empresaId")
+                ? Results.BadRequest(new { mensagem = "Informe o escopo somente no corpo JSON." })
+                : await service.AtualizarAsync(id, request, principal, ct)).WithName("AtualizarLancamento");
+        grupo.MapPost("/{id:long}/cancelamento", async (long id, CancelarLancamentoRequest request,
+            HttpRequest http, ClaimsPrincipal principal, AlteracaoLancamentoService service, CancellationToken ct) =>
+            http.Query.ContainsKey("empresaId")
+                ? Results.BadRequest(new { mensagem = "Informe o escopo somente no corpo JSON." })
+                : await service.CancelarAsync(id, request, principal, ct)).WithName("CancelarLancamento");
         grupo.MapPost("", async (CriarLancamentoRequest request, HttpRequest http, ClaimsPrincipal principal,
             CadastroLancamentoService service, CancellationToken ct) =>
             http.Query.ContainsKey("empresaId")

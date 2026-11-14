@@ -27,18 +27,7 @@ public sealed class CadastroLancamentoService(GestaoFinanceiraContext db, IHostE
         var escopo = await EscopoFinanceiro.ResolverAsync(principal, request.EmpresaId, db, ct);
         if (escopo.Erro is not null) return escopo.Erro;
         var empresa = escopo.EmpresaId;
-        var categoria = await db.Set<CategoriaFinanceira>().AsNoTracking()
-            .SingleOrDefaultAsync(c => c.EmpresaId == empresa && c.Id == request.CategoriaId, ct);
-        if (categoria is null || categoria.Tipo != request.Tipo)
-            erros[nameof(request.CategoriaId)] = ["Categoria inválida para a empresa e o tipo informados."];
-        async Task ValidarReferencia<T>(long? id, string campo) where T : class, IReferenciaFinanceira
-        {
-            if (id.HasValue && !await db.Set<T>().AsNoTracking().AnyAsync(x => x.EmpresaId == empresa && x.Id == id, ct))
-                erros[campo] = ["Referência inválida para a empresa."];
-        }
-        await ValidarReferencia<ClienteFinanceiro>(request.ClienteId, nameof(request.ClienteId));
-        await ValidarReferencia<FornecedorFinanceiro>(request.FornecedorId, nameof(request.FornecedorId));
-        await ValidarReferencia<CentroCustoFinanceiro>(request.CentroCustoId, nameof(request.CentroCustoId));
+        await ReferenciasLancamento.ValidarAsync(db, request, empresa, erros, ct);
         if (erros.Count > 0) return Results.ValidationProblem(erros);
         var item = new Lancamento
         {

@@ -25,8 +25,9 @@ controle de acesso por perfil e empresa. O projeto está em desenvolvimento.
 
 O cadastro financeiro está habilitado em Development e Testing, com contas, bancos
 e chaves JWT separados. O serviço e o interceptor validam a conexão correspondente
-ao ambiente e permitem somente inclusão financeira; UPDATE e DELETE financeiros
-continuam bloqueados. As regras anteriores de administração de empresas e usuários
+ao ambiente. Edição e cancelamento são exclusivos de Testing; Development continua
+sem UPDATE financeiro. DELETE financeiro permanece bloqueado em ambos. As regras anteriores
+de administração de empresas e usuários
 permanecem preservadas. ADMIN_GERAL informa empresaId na query dos GETs e no corpo JSON
 do POST; usuários empresariais usam a empresa do JWT e não podem informar empresaId no POST.
 ADMIN_GERAL não utiliza os endpoints exclusivos de usuários empresariais.
@@ -62,7 +63,8 @@ e, para o inicializador publicado, Windows PowerShell com execução de scripts 
 A configuracao atual exige MySQL em localhost:3306 e privilegios exatos por tabela.
 As tres tabelas de seguranca preservam SELECT, INSERT e UPDATE. Development tem
 SELECT/INSERT em lancamentos e auditoria e SELECT nas quatro tabelas auxiliares.
-Testing mantem SELECT/INSERT nessas seis tabelas para cadastro e novas fixtures.
+Testing acrescenta UPDATE somente em lancamentos e SELECT/INSERT em baixas,
+contas_bancarias e formas_pagamento para consultas e novas fixtures fictícias.
 Nao ha privilegios globais, de schema ou concessao, nem papeis ativos.
 A API rejeita destino, identidade ou permissoes incompativeis. Root nao e usado pela API.
 Development lê `ConnectionStrings:GestaoFinanceira` e `Jwt:Key` dos mecanismos
@@ -143,7 +145,8 @@ Exemplo: `/lancamentos?tipo=RECEITA&status=ABERTO&vencimentoInicio=2026-01-01&pa
 Para ADMIN_GERAL, acrescente `empresaId` em lista e detalhe.
 
 Development tem SELECT/INSERT em lancamentos e auditoria e somente SELECT nas tabelas
-auxiliares. Testing mantem SELECT/INSERT nas seis tabelas. Consulte a matriz exata e o procedimento
+auxiliares. Testing permite também UPDATE de lancamentos; auditoria continua somente SELECT/INSERT.
+Consulte a matriz exata e o procedimento
 seguro de execucao em [SECURITY_TESTING.md](SECURITY_TESTING.md).
 
 ## Cadastro financeiro em Development e Testing
@@ -171,5 +174,61 @@ Os testes funcionais gravam somente novas fixtures em Testing. Em 2026-11-14,
 um único cadastro fictício expressamente autorizado em Development retornou 201
 (lançamento 9), com GET 200 e auditoria 1. Os oito lançamentos anteriores e os demais
 registros e estruturas foram preservados.
-UPDATE e DELETE financeiros permanecem bloqueados. As regras e testes estao descritos
+UPDATE financeiro permanece bloqueado em Development, e DELETE em ambos os ambientes.
+As regras e testes estao descritos
 em [SECURITY_TESTING.md](SECURITY_TESTING.md).
+
+
+## Edição e cancelamento exclusivos de Testing
+
+`PUT /lancamentos/{id}` substitui os campos editáveis e retorna 200 com DTO.
+`POST /lancamentos/{id}/cancelamento` retorna 200 com o registro preservado e status
+CANCELADO. Ambos exigem JWT válido, perfil atual ADMIN/FINANCEIRO da própria empresa
+ou ADMIN_GERAL ativo com empresaId explícito no corpo JSON. CONSULTA recebe 403.
+Empresa e usuário devem estar ativos. O escopo não é aceito na query dessas operações.
+Em Development e demais ambientes, o serviço retorna 403 antes de acessar o banco.
+GETs e POST de cadastro permanecem disponíveis nos ambientes anteriores.
+
+Exemplo de PUT em Testing (IDs devem ser de fixtures da mesma empresa):
+
+```json
+{
+  "descricao": "Receita fictícia revisada",
+  "categoriaId": 1,
+  "clienteId": null,
+  "fornecedorId": null,
+  "centroCustoId": null,
+  "dataEmissao": "2026-11-01",
+  "dataVencimento": "2026-11-30",
+  "valor": 150.00,
+  "observacoes": "Revisão fictícia"
+}
+```
+
+Para cancelar como usuário empresarial, envie `{}`. Para ADMIN_GERAL, acrescente
+`"empresaId": 1` ao PUT ou envie `{"empresaId": 1}` no cancelamento. EmpresaId é
+somente escopo do administrador geral; nunca muda a empresa do lançamento.
+PUT exige descrição, categoria, datas e valor; campos opcionais omitidos ficam nulos.
+ID, tipo, criadoEm e status não são aceitos no corpo. Campos desconhecidos recebem 400.
+
+Somente ABERTO sem qualquer baixa pode ser editado ou cancelado. PARCIAL é bloqueado
+até definição das regras de saldo; QUITADO, CANCELADO e cancelamento repetido recebem
+409. Referências de outra empresa, categoria incompatível, datas ou valores inválidos
+recebem 400; IDs ausentes ou fora da empresa recebem 404. Não há exclusão ou estorno.
+As validações de texto, datas e decimal(15,2) são as mesmas do cadastro.
+
+A transação serializável bloqueia o lançamento durante a operação e registra auditoria
+ALTERAR/CANCELAR com autoria, estado anterior e posterior e horário UTC. Falha na
+auditoria reverte o UPDATE. Os endpoints não inserem nem alteram baixas.
+
+Execute o build e a suíte somente com as dependências Testing previamente preparadas:
+
+```powershell
+dotnet build --no-restore --nologo
+.\scripts\Start-SecurityEnvironment.ps1 -Environment Testing -RunTests
+```
+
+A rodada desta entrega aprovou 262 verificações (59 consultas, 51 cadastro/segurança,
+86 edição/cancelamento e 66 de login e regressão), sem reprovações. O build passou sem
+avisos; o aviso de HTTPS em HTTP local permanece documentado. Consulte
+[SECURITY_TESTING.md](SECURITY_TESTING.md) para permissões, preparação e limitações.

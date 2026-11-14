@@ -7,7 +7,7 @@ namespace GestaoFinanceira.Security;
 public sealed class FinancialWriteGuard(string environmentName) : SaveChangesInterceptor
 {
     private static bool HasFinancialChanges(DbContext? db) => db is not null && db.ChangeTracker.Entries()
-        .Any(e => (e.Entity is Lancamento or Auditoria) && (e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted));
+        .Any(e => (e.Entity is Lancamento or Auditoria or BaixaFinanceira) && (e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted));
     public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)
     {
         if (HasFinancialChanges(eventData.Context)) throw new InvalidOperationException("Gravação financeira exige verificação assíncrona do ambiente e da conexão.");
@@ -17,14 +17,28 @@ public sealed class FinancialWriteGuard(string environmentName) : SaveChangesInt
         InterceptionResult<int> result, CancellationToken cancellationToken = default)
     {
         if (!HasFinancialChanges(eventData.Context)) return result;
+        if (eventData.Context!.ChangeTracker.Entries<BaixaFinanceira>()
+            .Any(e => e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted))
+            throw new InvalidOperationException("Baixas são somente leitura para o EF.");
         var testing = environmentName == "Testing";
         if (!testing && environmentName != "Development")
             throw new InvalidOperationException("Gravação financeira permitida apenas em Development e Testing.");
         var db = eventData.Context!;
-        // Reject UPDATE and DELETE before opening a connection or issuing any SQL.
-        if (db.ChangeTracker.Entries().Any(e => (e.Entity is Lancamento or Auditoria) &&
-            (e.State is EntityState.Modified or EntityState.Deleted)))
-            throw new InvalidOperationException("Somente inclusão financeira é permitida.");
+        // Reject forbidden changes before opening any connection. Audit is append-only.
+        foreach (var entry in db.ChangeTracker.Entries().Where(e => e.Entity is Lancamento or Auditoria))
+        {
+            if (entry.State == EntityState.Deleted ||
+                (entry.State == EntityState.Modified && (!testing || entry.Entity is Auditoria)))
+                throw new InvalidOperationException("Somente inclusão em Development; exclusão e alteração de auditoria são proibidas.");
+            if (entry.State != EntityState.Modified) continue;
+            string[] editaveis = ["Descricao", "CategoriaId", "ClienteId", "FornecedorId", "CentroCustoId",
+                "DataEmissao", "DataVencimento", "Valor", "Observacoes", "Status"];
+            var status = entry.Property(nameof(Lancamento.Status));
+            if (entry.Properties.Any(p => p.IsModified && !editaveis.Contains(p.Metadata.Name)) ||
+                (string?)status.OriginalValue != "ABERTO" ||
+                (status.IsModified && (string?)status.CurrentValue != "CANCELADO"))
+                throw new InvalidOperationException("Somente campos editáveis de lançamentos ABERTO podem mudar em Testing.");
+        }
         await DatabaseSafety.VerifyAsync(db.Database.GetConnectionString()!, testing);
         if (db.Database.GetDbConnection().State != System.Data.ConnectionState.Open)
             await db.Database.OpenConnectionAsync(cancellationToken);

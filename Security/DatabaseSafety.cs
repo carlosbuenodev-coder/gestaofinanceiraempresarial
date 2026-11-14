@@ -69,6 +69,13 @@ public static class DatabaseSafety
             expected.Add(database + "/" + table + "/SELECT/NO");
             if (testing) expected.Add(database + "/" + table + "/INSERT/NO");
         }
+        if (testing)
+        {
+            expected.Add(database + "/lancamentos/UPDATE/NO");
+            foreach (var table in new[] { "baixas", "contas_bancarias", "formas_pagamento" })
+                foreach (var privilege in new[] { "SELECT", "INSERT" })
+                    expected.Add(database + "/" + table + "/" + privilege + "/NO");
+        }
         await using (var command = connection.CreateCommand())
         {
             command.CommandText = "SELECT TABLE_SCHEMA,TABLE_NAME,PRIVILEGE_TYPE,IS_GRANTABLE FROM information_schema.TABLE_PRIVILEGES WHERE GRANTEE=@grantee";

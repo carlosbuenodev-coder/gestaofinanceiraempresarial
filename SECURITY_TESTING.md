@@ -9,19 +9,21 @@ O servidor permitido é localhost:3306. A API nunca usa root.
 | Tabelas | Development | Testing |
 |---|---|---|
 | empresas, usuarios, administradores_gerais | SELECT, INSERT, UPDATE | SELECT, INSERT, UPDATE |
-| lancamentos | SELECT, INSERT | SELECT, INSERT |
+| lancamentos | SELECT, INSERT | SELECT, INSERT, UPDATE |
 | auditoria | SELECT, INSERT | SELECT, INSERT |
 | categorias, centros_custo, clientes, fornecedores | SELECT | SELECT, INSERT |
+| baixas, contas_bancarias, formas_pagamento | nenhum | SELECT, INSERT |
 
 Os INSERT financeiros de Testing atendem fixtures e POST /lancamentos.
 Development permite inclusão em lancamentos e auditoria, com SELECT nas referências.
-Não há UPDATE financeiro, DELETE, DDL, GRANT OPTION,
+UPDATE financeiro existe somente em lancamentos de Testing. Não há DELETE, DDL, GRANT OPTION,
 privilégios globais, de schema, de coluna ou papéis ativos nas contas da API.
 DatabaseSafety exige igualdade entre privilégios reais e autorizados.
 TestingWriteGuard verifica a conexão antes de SaveChangesAsync e recusa exclusões.
 
 Testing contém as três tabelas de segurança, auditoria e cinco tabelas financeiras:
-categorias, centros_custo, clientes, fornecedores e lancamentos. Foram preservados
+categorias, centros_custo, clientes, fornecedores e lancamentos, além de baixas,
+contas_bancarias e formas_pagamento adicionadas nesta etapa. Foram preservados
 tipos, índices e restrições do DDL financeiro; os contadores AUTO_INCREMENT originais
 não foram copiados. Todas as chaves estrangeiras apontam para Testing. Nenhuma view,
 trigger, registro original ou referência ao banco original foi copiada.
@@ -89,7 +91,8 @@ permanecem sob responsabilidade do operador, fora do repositório.
 `POST /lancamentos` está habilitado em Development e Testing. Nos demais ambientes,
 o serviço e o interceptor recusam gravação financeira. Cada ambiente exige sua
 conexão, identidade MySQL e privilégios exatos, sem acesso cruzado. O interceptor
-recusa UPDATE/DELETE financeiros antes de abrir conexão e exige SaveChangesAsync.
+recusa UPDATE financeiro em Development e DELETE em ambos antes de abrir conexão;
+em Testing aceita somente os campos controlados de lancamentos ABERTO. Exige SaveChangesAsync.
 Development recebeu exclusivamente INSERT em lancamentos, SELECT/INSERT em auditoria
 e SELECT nas quatro tabelas auxiliares; as permissões anteriores foram preservadas.
 
@@ -108,7 +111,8 @@ a mesma validação 400. Categoria precisa ser da empresa e compatível com o ti
 Campos desconhecidos, inclusive status, são recusados. Status inicial é ABERTO.
 
 O sucesso retorna 201, DTO e Location consultável pelo autor, incluindo empresaId
-no Location do ADMIN_GERAL. Não foram implementadas alterações, cancelamentos ou baixas.
+no Location do ADMIN_GERAL. Edição e cancelamento existem somente em Testing, conforme
+a seção específica abaixo. Não há operação de baixas pela API.
 
 Testing recebeu a estrutura auditoria, sem dados originais, e somente SELECT/INSERT
 nessa tabela para gestao_api_testing. Ela registra empresa, entidade lancamentos,
@@ -128,7 +132,8 @@ autoria empresarial e geral e rollback. O cenário principal verifica também o 
 após revogação de perfil, inativação de usuário, empresa e administrador geral.
 Os testes recusam uma conexão Testing apresentada como Development, bloqueiam escrita
 em Production e simulam estados Modified/Deleted no EF para ambas as entidades,
-em Development e Testing. O interceptor recusa esses estados antes de abrir conexão,
+em Development e Testing, incluindo mudanças de campos imutáveis. O interceptor recusa
+nessas verificações os estados proibidos antes de abrir conexão,
 sem emitir UPDATE ou DELETE. Nenhuma dessas verificações tenta gravar no banco original.
 
 ## Histórico da habilitação controlada em Development
@@ -175,3 +180,55 @@ HTTP local emitiu o aviso de porta HTTPS não determinada.
 
 Testes de carga e implantação com HTTPS exigem preparação própria. As ferramentas
 privadas, credenciais, JWTs e checkpoints cifrados permanecem fora dos arquivos publicados.
+
+
+## Edição e cancelamento em Testing
+
+PUT /lancamentos/{id} usa AtualizarLancamentoRequest. POST
+/lancamentos/{id}/cancelamento usa CancelarLancamentoRequest (corpo `{}` para usuário
+empresarial). Exemplos completos e limites estão no README. ADMIN e FINANCEIRO só
+operam na própria empresa; ADMIN_GERAL informa empresaId no JSON. CONSULTA recebe
+403. JWT inválido/expirado recebe 401, identidade ou empresa inativa/perfil revogado
+recebe 403. O filtro empresarial precede a busca e os bloqueios do lançamento;
+ID inexistente ou de outra empresa retorna 404 dentro do escopo autorizado.
+
+Somente ABERTO sem baixas pode mudar. PARCIAL não possui regra de alteração de saldo
+definida e fica bloqueado, assim como QUITADO e CANCELADO (409). Qualquer baixa bloqueia
+ambas as operações, mesmo se o status ainda for ABERTO. Não há estorno, DELETE, mudança
+de tipo ou de empresa. Transferências não possuem FK para lançamentos; são vinculadas
+a contas bancárias e não são modificadas. Nenhuma view original foi copiada.
+
+A autorização adicional de preparação abrangeu somente as estruturas Testing de
+contas_bancarias, formas_pagamento e baixas, compatíveis com o DDL original e sem
+registros originais. A conta Testing recebeu SELECT/INSERT nessas tabelas para as
+fixtures e UPDATE somente em lancamentos. A aplicação apenas lê baixas, e o interceptor
+recusa sua escrita via EF; as fixtures inserem somente novos registros fictícios.
+Auditoria permanece append-only. Não houve alteração de dados, estruturas ou permissões
+em Development; seus nove lançamentos e sua auditoria anterior foram preservados.
+
+AlteracaoLancamentoService verifica Testing antes de acessar o banco, exige a conta
+e o destino exatos e usa transação Serializable e SELECT FOR UPDATE filtrado por
+empresa e ID. A leitura de baixas e das referências ocorre dentro da transação.
+Operações concorrentes sobre o mesmo lançamento são serializadas; cancelamento
+repetido recebe 409 e não duplica auditoria. Não existe edição de baixas concorrente
+pela API nesta entrega; escritores futuros devem preservar o protocolo transacional.
+
+ALTERAR e CANCELAR registram empresa, registro, usuário, autorId/autorTipo/perfil,
+instante UTC e DTOs anterior/posterior. Para ADMIN_GERAL, usuario_id continua NULL.
+O UPDATE e a auditoria pertencem à mesma transação. A simulação de falha ocorre após
+o UPDATE e confirma rollback integral para edição e cancelamento. Não há JWTs ou
+segredos nos detalhes. Cancelamento mantém registro, referências e histórico.
+
+Os testes usam somente Testing, inclusive para simular o serviço/interceptor em
+Development sem conexão ao banco original. Cobrem quatro perfis, duas empresas,
+JWT inválido e expirado, referências cruzadas, valores/datas inválidos, imutabilidade,
+status bloqueados, baixas, duplicidade, auditoria, rollback, concorrência e bloqueios
+após revogação/inativação de usuário, empresa e administrador geral. Checkpoints
+privados verificam fixtures anteriores e o banco original, sem publicar seus dados.
+
+Resultado desta etapa: 59 verificações de consultas, 51 de cadastro/segurança,
+86 de edição/cancelamento e 66 de login/regressão: 262 aprovadas, zero reprovadas.
+Build --no-restore --nologo: zero erros e zero avisos. O middleware em HTTP local
+continua emitindo o aviso de porta HTTPS não determinada; não é aviso de compilação.
+As fixtures novas são mantidas e acumulam a cada rodada. PARCIAL, estornos, baixas pela
+API e habilitação de edição/cancelamento em Development permanecem fora do escopo.

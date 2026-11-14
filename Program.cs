@@ -35,6 +35,7 @@ if (testing)
     builder.WebHost.UseUrls("http://localhost:5217");
 
 builder.Services.AddScoped<CadastroLancamentoService>();
+builder.Services.AddScoped<AlteracaoLancamentoService>();
 var auditFailure = testing && args.Contains("--security-tests") ? new AuditFailureInterceptor() : null;
 if (auditFailure is not null) builder.Services.AddSingleton(auditFailure);
 builder.Services.AddDbContext<GestaoFinanceiraContext>(options =>

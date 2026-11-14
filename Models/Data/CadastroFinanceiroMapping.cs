@@ -7,6 +7,11 @@ public static class CadastroFinanceiroMapping
 {
     public static void Aplicar(ModelBuilder model)
     {
+        var baixa = model.Entity<BaixaFinanceira>();
+        baixa.ToTable("baixas");
+        baixa.HasKey(x => x.Id);
+        baixa.Property(x => x.Id).HasColumnName("id");
+        baixa.Property(x => x.LancamentoId).HasColumnName("lancamento_id");
         Referencia<CategoriaFinanceira>(model, "categorias");
         model.Entity<CategoriaFinanceira>().Property(x => x.Tipo).HasColumnName("tipo").HasColumnType("enum('RECEITA','DESPESA')");
         Referencia<ClienteFinanceiro>(model, "clientes");

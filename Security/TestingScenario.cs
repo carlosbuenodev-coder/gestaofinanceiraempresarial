@@ -88,8 +88,21 @@ public static class TestingScenario
         await FinanceTestingScenario.RunAsync(db, http, a.Id, b.Id, tokenA, tokenFinance, tokenConsulta, tokenB, tokenGeral);
         await PostLancamentosTestingScenario.RunAsync(services, db, http, a.Id, b.Id,
             adminA.Id, financeA.Id, geral.Id, tokenA, tokenFinance, tokenConsulta, tokenGeral);
+        await AlteracaoLancamentosTestingScenario.RunAsync(services, db, http, a.Id, b.Id,
+            adminA.Id, financeA.Id, geral.Id, tokenA, tokenFinance, tokenConsulta, tokenB, tokenGeral);
         var postBody = new CriarLancamentoRequest("RECEITA", "Cadastro ficticio bloqueado", 1,
             DataEmissao: new DateOnly(2026, 11, 1), DataVencimento: new DateOnly(2026, 11, 30), Valor: 1);
+        async Task AlteracoesRevogadas(string token, long? empresa = null)
+        {
+            var before = await AlteracaoLancamentosTestingScenario.Snapshot(db);
+            await Expect(HttpMethod.Put, $"/lancamentos/{long.MaxValue}", token,
+                new AtualizarLancamentoRequest("Edição fictícia bloqueada", 1,
+                    DataEmissao: new DateOnly(2026, 11, 1), DataVencimento: new DateOnly(2026, 11, 30), Valor: 1, EmpresaId: empresa), 403);
+            await Expect(HttpMethod.Post, $"/lancamentos/{long.MaxValue}/cancelamento", token,
+                new CancelarLancamentoRequest(empresa), 403);
+            if (before != await AlteracaoLancamentosTestingScenario.Snapshot(db))
+                throw new InvalidOperationException("Permissão revogada alterou dados financeiros.");
+        }
 
 
         await Expect(HttpMethod.Get, "/empresas", tokenGeral, null, 200);
@@ -146,6 +159,8 @@ public static class TestingScenario
         await Expect(HttpMethod.Get, $"/lancamentos/{long.MaxValue}", tokenConsulta, null, 403);
         await Expect(HttpMethod.Get, "/usuarios/me", tokenFinance, null, 403);
         await Expect(HttpMethod.Get, "/usuarios/me", tokenConsulta, null, 403);
+        await AlteracoesRevogadas(tokenFinance);
+        await AlteracoesRevogadas(tokenConsulta);
         if (oldProfileFingerprint != await Fingerprint(db)) throw new InvalidOperationException();
         await Denied(HttpMethod.Put, financeA.Id, tokenA, 400,
             new { nome = updated.Nome, email = updated.Email, perfil = "ADMIN" });
@@ -157,18 +172,21 @@ public static class TestingScenario
             throw new InvalidOperationException("Operações ADMIN_GERAL não persistiram.");
         await Expect(HttpMethod.Get, "/usuarios/me", tokenB, null, 403);
         await Expect(HttpMethod.Post, "/lancamentos", tokenB, postBody, 403);
+        await AlteracoesRevogadas(tokenB);
         Console.WriteLine("[OK] Operações permitidas persistidas somente em fixtures; bloqueios após desativação/rebaixamento confirmados.");
         geral.Ativo = false;
         await db.SaveChangesAsync();
         await Expect(HttpMethod.Get, $"/lancamentos?empresaId={a.Id}", tokenGeral, null, 403);
         await Expect(HttpMethod.Get, $"/lancamentos/{long.MaxValue}?empresaId={a.Id}", tokenGeral, null, 403);
         await Expect(HttpMethod.Post, "/lancamentos", tokenGeral, postBody with { EmpresaId = a.Id }, 403);
+        await AlteracoesRevogadas(tokenGeral, a.Id);
         a.Ativo = false;
         await db.SaveChangesAsync();
         await Expect(HttpMethod.Post, "/lancamentos", tokenA, postBody, 403);
         await Expect(HttpMethod.Post, "/lancamentos", tokenGeral, postBody with { EmpresaId = a.Id }, 403);
         await Expect(HttpMethod.Get, "/lancamentos", tokenA, null, 403);
         await Expect(HttpMethod.Get, $"/lancamentos/{long.MaxValue}", tokenA, null, 403);
+        await AlteracoesRevogadas(tokenA);
         Console.WriteLine("[OK] SECURITY_SCENARIO_COMPLETE — nenhum registro excluído.");
     }
 
