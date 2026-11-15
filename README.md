@@ -13,7 +13,7 @@ controle de acesso por perfil e empresa. O projeto está em desenvolvimento.
 - Consulta do próprio cadastro e listagem da própria empresa para ADMIN.
 - Isolamento por empresa do JWT e verificação do acesso atual do ADMIN no banco.
 - Development e Testing com contas MySQL, conexões e JWTs separados.
-- Baixas parciais/totais, saldo e estorno rastreável exclusivamente em Testing.
+- Baixas parciais/totais, saldo e estorno rastreável em Development e Testing.
 
 ## Perfis e permissões atuais
 
@@ -63,8 +63,9 @@ e, para o inicializador publicado, Windows PowerShell com execução de scripts 
 
 A configuracao atual exige MySQL em localhost:3306 e privilegios exatos por tabela.
 As tres tabelas de seguranca preservam SELECT, INSERT e UPDATE. Development tem
-SELECT/INSERT/UPDATE em lancamentos, SELECT/INSERT em auditoria, SELECT em baixas
-e nas quatro tabelas auxiliares. Baixas não recebe permissão de escrita em Development.
+SELECT/INSERT/UPDATE em lancamentos, SELECT/INSERT em auditoria, baixas e estornos_baixas,
+e SELECT nas tabelas auxiliares, contas_bancarias e formas_pagamento. Baixas e estornos
+não recebem UPDATE ou DELETE.
 Testing acrescenta UPDATE somente em lancamentos e SELECT/INSERT em baixas,
 contas_bancarias e formas_pagamento para consultas e novas fixtures fictícias.
 Nao ha privilegios globais, de schema ou concessao, nem papeis ativos.
@@ -146,8 +147,8 @@ saldo ou baixas. O detalhe devolve um DTO sem dados de autenticacao.
 Exemplo: `/lancamentos?tipo=RECEITA&status=ABERTO&vencimentoInicio=2026-01-01&pagina=1&tamanhoPagina=20`.
 Para ADMIN_GERAL, acrescente `empresaId` em lista e detalhe.
 
-Development tem SELECT/INSERT/UPDATE em lancamentos, SELECT/INSERT em auditoria
-e somente SELECT em baixas e nas tabelas auxiliares. Testing mantém UPDATE somente
+Development tem SELECT/INSERT/UPDATE em lancamentos, SELECT/INSERT em auditoria,
+baixas e estornos_baixas e SELECT nas referências e catálogos. Testing mantém UPDATE somente
 em lancamentos; auditoria continua somente SELECT/INSERT.
 Consulte a matriz exata e o procedimento
 seguro de execucao em [SECURITY_TESTING.md](SECURITY_TESTING.md).
@@ -218,7 +219,7 @@ Somente ABERTO sem qualquer baixa pode ser editado ou cancelado. PARCIAL é bloq
 até definição das regras de saldo; QUITADO, CANCELADO e cancelamento repetido recebem
 409. Referências de outra empresa, categoria incompatível, datas ou valores inválidos
 recebem 400; IDs ausentes ou fora da empresa recebem 404. Não há exclusão ou estorno
-do lançamento. O estorno de baixa existe somente no módulo Testing descrito abaixo.
+do lançamento. O estorno de baixa existe no módulo descrito abaixo.
 As validações de texto, datas e decimal(15,2) são as mesmas do cadastro.
 
 A transação serializável bloqueia o lançamento durante a operação e registra auditoria
@@ -259,11 +260,13 @@ Os nove lançamentos, a auditoria e as demais estruturas e registros foram prese
 Não há CONSULTA ativo em Development: o bloqueio desse perfil foi comprovado por HTTP
 em Testing e no serviço Development usando contexto Testing, sem criar usuários reais.
 
-## Baixas financeiras — somente Testing
+## Baixas financeiras — Development e Testing
 
-O módulo inteiro, incluindo consultas, retorna 403 fora de Testing após autenticação.
-As operações anteriores de lançamentos em Development continuam habilitadas; nenhuma
-permissão, estrutura ou registro desse banco foi alterado nesta entrega.
+O módulo inteiro, incluindo consultas, retorna 403 fora de Development/Testing após
+autenticação. A política FinancialPaymentPolicy habilita os dois ambientes explicitamente;
+as políticas anteriores de cadastro, edição e cancelamento permanecem preservadas.
+Para a ativação, foi autorizada especificamente a tabela complementar estornos_baixas
+em Development, sem copiar registros nem alterar as tabelas e views existentes.
 
 | Método | Rota | Resposta |
 |---|---|---|
@@ -332,8 +335,30 @@ Conflitos concorrentes recebem 409; erros de persistência, 500 genérico. Não 
 chave de idempotência para reenvios: após timeout ou resultado inconclusivo, consulte
 o histórico e o saldo antes de decidir reenviar; a API não repete operações sozinha.
 
-Prepare somente a estrutura/permissões Testing descritas em SECURITY_TESTING.md e
-execute a suíte existente com `-Environment Testing -RunTests`. O repositório não
+Prepare a estrutura/permissões do ambiente descritas em SECURITY_TESTING.md e
+execute a suíte de escrita somente com `-Environment Testing -RunTests`. O repositório não
 provisiona bancos ao iniciar e nunca executa migração em Development. O módulo não
 calcula saldo bancário, não altera contas bancárias e não oferece encargos novos,
 transferências ou estorno de lançamento.
+
+## Validação da ativação de baixas em Development
+
+A ativação acrescentou somente INSERT em baixas, SELECT em contas_bancarias e
+formas_pagamento e SELECT/INSERT em estornos_baixas para gestao_api_dev@localhost.
+Os privilégios anteriores foram preservados; não há DELETE, UPDATE de baixa/estorno,
+DDL, privilégios globais ou acesso cruzado nas contas da API. Testing não recebeu
+alteração de estrutura ou privilégios nesta ativação.
+
+A suíte completa em Testing aprovou 450 verificações, sem reprovações (159 do módulo
+de baixas e 291 de consultas, cadastro, edição/cancelamento, login e regressão).
+O build passou sem erros ou avisos. Development passou por 23 verificações HTTP de
+autenticação, GETs, saldos, registro dos endpoints e bloqueios seguros, sem qualquer
+POST com autorização válida para baixa ou estorno. Não há CONSULTA ativo nesse banco;
+sua recusa foi comprovada por HTTP em Testing e no serviço Development com contexto Testing.
+
+Os nove lançamentos ABERTO, zero baixas e uma auditoria permaneceram intactos, assim
+como valores, saldos, tabelas e views existentes. A nova tabela de estornos ficou
+vazia. Os exemplos de escrita continuam destinados somente a Testing; esta ativação
+não autoriza registrar ou estornar baixas em Development durante a validação.
+O procedimento de reversão está em SECURITY_TESTING.md; ele preserva os registros
+e a tabela complementar, bloqueando a política e removendo só as concessões novas.

@@ -20,11 +20,12 @@ public sealed class FinancialWriteGuard(string environmentName) : SaveChangesInt
         if (!HasFinancialChanges(eventData.Context)) return result;
         var testing = environmentName == "Testing";
         var db = eventData.Context!;
-        var movimento = testing && db is GestaoFinanceiraContext { OperacaoBaixa: true } &&
+        var movimento = FinancialPaymentPolicy.AllowsPayments(environmentName) &&
+            db is GestaoFinanceiraContext { OperacaoBaixa: true } &&
             db.Database.CurrentTransaction is not null;
         if (db.ChangeTracker.Entries().Any(e => (e.Entity is BaixaFinanceira or EstornoBaixa) &&
             (e.State is EntityState.Modified or EntityState.Deleted || (e.State == EntityState.Added && !movimento))))
-            throw new InvalidOperationException("Baixas e estornos são imutáveis; inclusão somente na transação de baixas em Testing.");
+            throw new InvalidOperationException("Baixas e estornos são imutáveis; inclusão somente na transação de baixas em ambiente habilitado.");
         if (!testing && environmentName != "Development")
             throw new InvalidOperationException("Gravação financeira permitida apenas em Development e Testing.");
         // Reject forbidden changes before opening any connection. Audit is append-only.

@@ -12,13 +12,13 @@ O servidor permitido é localhost:3306. A API nunca usa root.
 | lancamentos | SELECT, INSERT, UPDATE | SELECT, INSERT, UPDATE |
 | auditoria | SELECT, INSERT | SELECT, INSERT |
 | categorias, centros_custo, clientes, fornecedores | SELECT | SELECT, INSERT |
-| baixas | SELECT | SELECT, INSERT |
-| contas_bancarias, formas_pagamento | nenhum | SELECT, INSERT |
-| estornos_baixas | nenhum | SELECT, INSERT |
+| baixas | SELECT, INSERT | SELECT, INSERT |
+| contas_bancarias, formas_pagamento | SELECT | SELECT, INSERT |
+| estornos_baixas | SELECT, INSERT | SELECT, INSERT |
 
 Os INSERT financeiros de Testing atendem fixtures e POST /lancamentos.
-Development permite inclusão em lancamentos e auditoria, com SELECT nas referências
-e em baixas. UPDATE financeiro existe somente em lancamentos dos dois ambientes.
+Development permite inclusão em lancamentos, auditoria, baixas e estornos_baixas,
+com SELECT nas referências e catálogos. UPDATE financeiro existe somente em lancamentos dos dois ambientes.
 Não há DELETE, DDL, GRANT OPTION,
 privilégios globais, de schema, de coluna ou papéis ativos nas contas da API.
 DatabaseSafety exige igualdade entre privilégios reais e autorizados.
@@ -115,7 +115,7 @@ Campos desconhecidos, inclusive status, são recusados. Status inicial é ABERTO
 
 O sucesso retorna 201, DTO e Location consultável pelo autor, incluindo empresaId
 no Location do ADMIN_GERAL. Edição e cancelamento existem nos dois ambientes, conforme
-a seção específica abaixo. O módulo de baixas é exclusivo de Testing, conforme a seção final.
+a seção específica abaixo. O módulo de baixas foi ativado também em Development, conforme a seção final.
 
 Testing recebeu a estrutura auditoria, sem dados originais, e somente SELECT/INSERT
 nessa tabela para gestao_api_testing. Ela registra empresa, entidade lancamentos,
@@ -205,7 +205,7 @@ A autorização adicional de preparação abrangeu somente as estruturas Testing
 contas_bancarias, formas_pagamento e baixas, compatíveis com o DDL original e sem
 registros originais. A conta Testing recebeu SELECT/INSERT nessas tabelas para as
 fixtures e UPDATE somente em lancamentos. O módulo novo permite inclusão de baixas
-somente dentro da sua transação em Testing; UPDATE/DELETE de baixas continuam proibidos.
+somente dentro da sua transação em ambiente habilitado; UPDATE/DELETE de baixas continuam proibidos.
 Auditoria permanece append-only. Na implementação original desta etapa, não houve
 alteração em Development. A ativação posterior acrescenta somente as duas permissões
 documentadas abaixo; os nove lançamentos e a auditoria continuam preservados.
@@ -298,6 +298,10 @@ a API nunca recebe credenciais administrativas nem executa GRANT:
 
 ## Reversão segura da ativação
 
+Esta seção reverte edição/cancelamento de lançamentos. Se o módulo de baixas estiver
+ativo, primeiro desative/reverta esse módulo pela seção própria abaixo: UPDATE em
+lancamentos e SELECT em baixas são privilégios compartilhados necessários aos pagamentos.
+
 Com a API parada e sem operações em andamento, publicar novamente a política com
 `DevelopmentEnabled` em `false` e remover **somente** as duas concessões novas:
 
@@ -353,7 +357,7 @@ Somente novas fixtures fictícias foram inseridas/alteradas nas rodadas Testing.
 Uma operação futura em Development exige autorização específica sobre registros e
 dados. Estornos e novas regras de saldo continuam fora do escopo.
 
-## Módulo de baixas e estornos em Testing
+## Módulo de baixas e estornos em Development e Testing
 
 O DDL real de baixas contém id, lancamento_id, conta_bancaria_id, forma_pagamento_id
 opcional, data_pagamento DATE, valor/juros/multa/desconto DECIMAL(15,2) e observacoes
@@ -370,8 +374,10 @@ legados são expostos separadamente, sem alterar os registros. Não há regra no
 encargos, saldo bancário ou transferências.
 O suporte a juros, multa e desconto em novos registros fica para uma etapa futura.
 
-A única alteração estrutural desta entrega foi a tabela complementar abaixo, somente
-em Testing. Nenhuma coluna ou registro existente foi modificado pelo provisionamento:
+Na implementação inicial, a única alteração estrutural foi a tabela complementar
+abaixo em Testing. Na ativação posterior, o usuário autorizou especificamente a mesma
+estrutura em Development, como exceção à proibição original de alterações estruturais.
+Nenhuma coluna ou registro existente foi modificado pelo provisionamento:
 
 ```sql
 CREATE TABLE `gestao_financeira_seguranca_testes`.`estornos_baixas` (
@@ -393,11 +399,12 @@ GRANT SELECT, INSERT
 Esse provisionamento é administrativo, separado da API, e recusa sobrescrever a
 estrutura existente. Não é comando de inicialização ou migração automática. Depois
 da preparação, DatabaseSafety exige exatamente a matriz da tabela inicial. Não houve
-novas concessões em Development nem UPDATE/DELETE em baixas, estornos ou auditoria.
-O estorno é append-only; baixa_id único impede duplicidade e a FK é local a Testing.
+novas concessões em Development na implementação inicial. A ativação descrita abaixo
+acrescentou somente as concessões necessárias, sem UPDATE/DELETE em baixas, estornos ou auditoria.
+O estorno é append-only; baixa_id único impede duplicidade e a FK é local ao banco de cada ambiente.
 
-Os cinco endpoints, exemplos e DTOs estão no README. O módulo inteiro é Testing-only:
-fora desse ambiente o serviço retorna 403 antes de acessar o banco. A autenticação
+Os cinco endpoints, exemplos e DTOs estão no README. FinancialPaymentPolicy permite
+explicitamente Development/Testing; fora deles, o serviço retorna 403 antes de acessar o banco. A autenticação
 continua obrigatória. ADMIN/FINANCEIRO usam a empresa do JWT; ADMIN_GERAL informa
 empresaId explicitamente, no JSON dos POSTs e na query dos GETs. CONSULTA só lê.
 Valida-se a situação atual das identidades e da empresa antes de procurar IDs ou
@@ -418,7 +425,7 @@ lançamento seguem esse protocolo. Leituras compostas usam RepeatableRead para s
 status, contagem e itens consistentes. Não se usa avaliação em memória para filtrar
 empresas: filtros, contagens e paginação são executados no banco antes do DTO.
 
-FinancialWriteGuard permite INSERT de baixa/estorno apenas em Testing, com transação
+FinancialWriteGuard permite INSERT de baixa/estorno apenas em ambiente habilitado, com transação
 ativa e escopo interno do serviço; nunca aceita UPDATE/DELETE desses registros. Nesse
 escopo, só o status do lançamento pode mudar, entre ABERTO/PARCIAL/QUITADO. Não há
 parâmetro HTTP ou configuração que abra o escopo. Os controles anteriores do cadastro,
@@ -444,17 +451,18 @@ múltiplas baixas, centavos, saldo/status, RECEITA/DESPESA, catálogo de pagamen
 conta inativa/estrangeira, validação, quatro perfis, duas empresas, JWT, auditoria,
 rollback após INSERT/estorno/status, concorrência de baixa total e parcial e estorno
 duplicado. A suíte principal cobre também usuário/perfil/empresa/ADMIN_GERAL revogados,
-em todas as novas rotas. Serviços em Development/Production/Staging são testados
-com contexto Testing e recusam a operação antes de emitir SQL. O guard também bloqueia
+em todas as novas rotas. Production/Staging permanecem bloqueados; Development é
+testado com contexto Testing e deve rejeitar a conexão incompatível antes de emitir SQL.
+O guard também bloqueia
 entidades novas/alteradas/excluídas fora da transação autorizada.
 
 Limitações: não há idempotência por chave de requisição ou reenvio automático; consulte
 saldo/histórico após resultado inconclusivo. Não há novas operações de baixas em
-Development, encargos novos, baixa/estorno de lançamento cancelado, reparo de legado
+ambientes não habilitados, encargos novos, baixa/estorno de lançamento cancelado, reparo de legado
 inconsistente, edição de PARCIAL ou estorno de lançamento. Escritores externos futuros
 devem seguir o mesmo bloqueio do lançamento para manter a concorrência segura.
 
-Resultado desta entrega: 448 verificações aprovadas na rodada completa final,
+Resultado da implementação inicial: 448 verificações aprovadas na rodada completa final,
 zero reprovadas (59 consultas, 51 cadastro, 90 edição/cancelamento, 157 baixas e
 91 de login/regressão, incluindo revogações nas novas rotas). O build final passou
 com zero erros e zero avisos. Houve uma compilação inicial bloqueada pela DLL em uso
@@ -466,3 +474,105 @@ A comparação final confirmou todos os dados, tabelas, views e privilégios ori
 intactos, incluindo nove lançamentos e uma auditoria, e todas as fixtures Testing
 anteriores preservadas. Development foi reiniciado sem habilitar o novo módulo.
 Nenhum teste de escrita financeira foi executado contra o banco original.
+
+## Ativação técnica do módulo de baixas em Development — 2026-11-14
+
+O estado inicial foi registrado por leitura: nove lançamentos ABERTO, zero baixas,
+uma auditoria e nenhuma tabela estornos_baixas. Valores, principal baixado e saldo
+por lançamento foram guardados em checkpoint privado cifrado. A ausência da estrutura
+de estornos impedia também as consultas e os cálculos do módulo; a ativação foi
+interrompida até o usuário autorizar especificamente somente essa tabela complementar.
+
+A autorização adicional permitiu criar a estrutura abaixo em Development, sem dados
+copiados, com o mesmo modelo de Testing, FK local e baixa_id único:
+
+```sql
+CREATE TABLE `gestao_financeira_empresarial`.`estornos_baixas` (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  baixa_id BIGINT NOT NULL,
+  motivo VARCHAR(500) NOT NULL,
+  criado_em DATETIME(6) NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_estorno_baixa (baixa_id),
+  CONSTRAINT fk_estorno_baixa FOREIGN KEY (baixa_id)
+    REFERENCES `gestao_financeira_empresarial`.`baixas` (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+```
+
+As permissões anteriores foram preservadas. Foram adicionadas somente cinco entradas
+de privilégios por tabela, mediante estes comandos administrativos fora da API:
+
+```sql
+GRANT INSERT ON `gestao_financeira_empresarial`.`baixas`
+  TO 'gestao_api_dev'@'localhost';
+GRANT SELECT ON `gestao_financeira_empresarial`.`contas_bancarias`
+  TO 'gestao_api_dev'@'localhost';
+GRANT SELECT ON `gestao_financeira_empresarial`.`formas_pagamento`
+  TO 'gestao_api_dev'@'localhost';
+GRANT SELECT, INSERT ON `gestao_financeira_empresarial`.`estornos_baixas`
+  TO 'gestao_api_dev'@'localhost';
+```
+
+SELECT em baixas, SELECT/UPDATE em lancamentos e SELECT/INSERT em auditoria já existiam
+e não foram concedidos novamente. A conta da API não recebeu CREATE, ALTER, DROP,
+DELETE, GRANT OPTION, privilégio global, papel ou acesso a Testing. A conta e a
+estrutura de Testing permaneceram iguais; só novas fixtures fictícias foram usadas.
+
+FinancialPaymentPolicy.DevelopmentEnabled está em true. O serviço escolhe a conta
+e a matriz pelo ambiente, e o guard exige ambiente habilitado, escopo interno e
+transação ativa para incluir baixa/estorno ou recalcular status. Nenhum parâmetro
+HTTP ou configuração pode ampliar os ambientes. FinancialUpdatePolicy e as regras
+anteriores de cadastro, edição e cancelamento não foram alteradas.
+
+O build --no-restore --nologo terminou com zero erros e zero avisos. A nova execução
+da suíte inteira em Testing aprovou 450 verificações, zero reprovadas: 59 consultas,
+51 cadastro, 90 edição/cancelamento, 159 baixas e 91 de login/regressão. Os testes
+adaptados comprovam recusa de conexão Testing no serviço Development, inclusive nos
+GETs, e recusa de escrita por CONSULTA antes de acessar o banco. Auditoria, rollback,
+concorrência, estorno, principal, ajustes e regressões anteriores passaram novamente.
+Permanece somente o aviso de HTTPS dos testes HTTP locais, sem aviso de compilação.
+
+A API foi reiniciada controladamente e aprovou 23 verificações HTTP em Development:
+JWT renovado pelo login normal, GETs anteriores, consultas de baixas, saldos da própria
+empresa idênticos ao checkpoint, OpenAPI com os cinco endpoints, 401 sem autenticação
+ou JWT inválido, 403 para escopo estrangeiro, 400 para parâmetro inválido e 405 para
+DELETE. Nenhum POST de baixa/estorno com autorização válida foi enviado, nem mesmo
+contra ID inexistente. Os POSTs negativos foram exclusivamente sem JWT ou com JWT
+inválido. Development não tem CONSULTA ativo; o teste HTTP desse perfil foi feito
+em Testing, complementado pelo teste direto do serviço com ambiente Development
+e contexto Testing. Não se criou ou ativou usuário para essa validação.
+
+A comparação final confirmou os nove lançamentos, zero baixas, zero estornos e uma
+auditoria, com valores, status e saldos iguais aos iniciais. Todos os registros,
+tabelas e views preexistentes permaneceram intactos; a única inclusão estrutural foi
+a tabela complementar autorizada, vazia. As fixtures Testing anteriores foram
+preservadas. Não houve execução financeira real em Development nesta ativação.
+
+### Reversão segura somente do módulo de baixas
+
+Interromper a API e aguardar o término das transações. Publicar a política de pagamentos
+com DevelopmentEnabled em false, sem alterar FinancialUpdatePolicy. Revogar somente
+as concessões acrescentadas nesta ativação:
+
+```sql
+REVOKE INSERT ON `gestao_financeira_empresarial`.`baixas`
+  FROM 'gestao_api_dev'@'localhost';
+REVOKE SELECT ON `gestao_financeira_empresarial`.`contas_bancarias`
+  FROM 'gestao_api_dev'@'localhost';
+REVOKE SELECT ON `gestao_financeira_empresarial`.`formas_pagamento`
+  FROM 'gestao_api_dev'@'localhost';
+REVOKE SELECT, INSERT ON `gestao_financeira_empresarial`.`estornos_baixas`
+  FROM 'gestao_api_dev'@'localhost';
+```
+
+Não revogar SELECT em baixas nem os privilégios anteriores de lançamentos/auditoria.
+Manter a tabela complementar e todos os registros, sem DROP, DELETE ou correções
+financeiras automáticas. Conferir a matriz anterior e reiniciar a API com o módulo
+de baixas bloqueado e as funcionalidades anteriores preservadas. DatabaseSafety
+recusa qualquer combinação de política e privilégios incompatíveis. A tabela nova
+é preservada mesmo se a ativação for revertida; sua exclusão não está autorizada.
+
+As limitações anteriores permanecem: sem encargos novos ou chave de idempotência,
+sem estorno de lançamento cancelado, sem reparo automático de legado inconsistente.
+A ativação técnica não comprova execução de baixa/estorno real em Development:
+qualquer operação financeira concreta depende de autorização posterior própria.

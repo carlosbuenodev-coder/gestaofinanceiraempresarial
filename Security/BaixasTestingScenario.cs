@@ -253,7 +253,7 @@ public static class BaixasTestingScenario
             await Saldo(corridaEstorno, admin, 0, "ABERTO"); checks++;
         }
         finally { foreach (var response in estornos) response.Dispose(); }
-        foreach (var env in new[] { "Development", "Production", "Staging" })
+        foreach (var env in new[] { "Production", "Staging" })
         {
             var before = await Snapshot();
             var service = new BaixasService(db, new Microsoft.Extensions.Hosting.Internal.HostingEnvironment { EnvironmentName = env });
@@ -266,6 +266,29 @@ public static class BaixasTestingScenario
             }
             Check(before == await Snapshot(), "bloqueio de ambiente gravou");
         }
+        var development = new BaixasService(db, new Microsoft.Extensions.Hosting.Internal.HostingEnvironment { EnvironmentName = "Development" });
+        var adminIdentity = new ClaimsPrincipal(new ClaimsIdentity([
+            new Claim(ClaimTypes.Role, "ADMIN"), new Claim(ClaimTypes.NameIdentifier, adminId.ToString()),
+            new Claim("empresa_id", a.ToString()), new Claim("tipo_usuario", "EMPRESA")], "Test"));
+        foreach (var operacao in new[] { "criar", "estornar", "saldo", "lista", "baixa" })
+        {
+            var before = await Snapshot(); var rejected = false;
+            try
+            {
+                if (operacao == "criar") await development.CriarAsync(aberto, body, adminIdentity, default);
+                else if (operacao == "estornar") await development.EstornarAsync(p1.Baixa.Id, new("Fictício"), adminIdentity, default);
+                else await development.ConsultarAsync(operacao, aberto, null, 1, 20, adminIdentity, default);
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("Conexão recusada")) { rejected = true; }
+            Check(rejected && before == await Snapshot(), "Development aceitou conexão Testing"); checks++;
+        }
+        var consultaIdentity = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Role, "CONSULTA")], "Test"));
+        var beforeConsulta = await Snapshot();
+        Check(await development.CriarAsync(aberto, body, consultaIdentity, default)
+            is Microsoft.AspNetCore.Http.HttpResults.ForbidHttpResult, "Development liberou baixa para CONSULTA");
+        Check(await development.EstornarAsync(p1.Baixa.Id, new("Fictício"), consultaIdentity, default)
+            is Microsoft.AspNetCore.Http.HttpResults.ForbidHttpResult, "Development liberou estorno para CONSULTA");
+        Check(beforeConsulta == await Snapshot(), "CONSULTA alterou dados"); checks += 2;
         foreach (var env in new[] { "Development", "Testing" })
             foreach (var state in new[] { EntityState.Added, EntityState.Modified, EntityState.Deleted })
                 foreach (var isEstorno in new[] { false, true })
@@ -279,6 +302,6 @@ public static class BaixasTestingScenario
                     try { await guarded.SaveChangesAsync(); } catch (InvalidOperationException) { rejected = true; }
                     Check(rejected && guarded.Database.GetDbConnection().State == System.Data.ConnectionState.Closed, "guard liberou baixa/estorno fora da transação"); checks++;
                 }
-        Console.WriteLine($"[OK] BAIXAS_SCENARIO: {checks} verificações aprovadas; principal, status, estorno imutável, perfis, saldo, auditoria, rollback, concorrência e bloqueio de Development.");
+        Console.WriteLine($"[OK] BAIXAS_SCENARIO: {checks} verificações aprovadas; principal, status, estorno imutável, perfis, saldo, auditoria, rollback, concorrência e isolamento de ambientes.");
     }
 }

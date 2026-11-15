@@ -13,8 +13,8 @@ public sealed class BaixasService(GestaoFinanceiraContext db, IHostEnvironment e
 {
     private IResult? Bloqueio(ClaimsPrincipal principal, bool escrita)
     {
-        if (!environment.IsEnvironment("Testing"))
-            return Results.Problem("Módulo de baixas disponível somente em Testing.", statusCode: 403);
+        if (!FinancialPaymentPolicy.AllowsPayments(environment.EnvironmentName))
+            return Results.Problem("Módulo de baixas não habilitado neste ambiente.", statusCode: 403);
         if (escrita && principal.FindFirstValue(ClaimTypes.Role) is not ("ADMIN" or "FINANCEIRO" or "ADMIN_GERAL"))
             return Results.Forbid();
         return null;
@@ -22,9 +22,10 @@ public sealed class BaixasService(GestaoFinanceiraContext db, IHostEnvironment e
 
     private async Task AbrirAsync(CancellationToken ct)
     {
-        await DatabaseSafety.VerifyAsync(db.Database.GetConnectionString()!, true);
+        var testing = environment.IsEnvironment("Testing");
+        await DatabaseSafety.VerifyAsync(db.Database.GetConnectionString()!, testing);
         await db.Database.OpenConnectionAsync(ct);
-        await DatabaseSafety.VerifyOpenAsync(db.Database.GetDbConnection(), true);
+        await DatabaseSafety.VerifyOpenAsync(db.Database.GetDbConnection(), testing);
     }
 
     private static string Status(decimal valor, decimal total) => total == 0 ? "ABERTO" : total == valor ? "QUITADO" : "PARCIAL";

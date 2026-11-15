@@ -85,6 +85,16 @@ public static class DatabaseSafety
             expected.Add(database + "/lancamentos/UPDATE/NO");
             expected.Add(database + "/baixas/SELECT/NO");
         }
+        if (!testing && FinancialPaymentPolicy.DevelopmentEnabled)
+        {
+            expected.Add(database + "/lancamentos/UPDATE/NO");
+            expected.Add(database + "/baixas/SELECT/NO");
+            expected.Add(database + "/baixas/INSERT/NO");
+            foreach (var table in new[] { "contas_bancarias", "formas_pagamento" })
+                expected.Add(database + "/" + table + "/SELECT/NO");
+            foreach (var privilege in new[] { "SELECT", "INSERT" })
+                expected.Add(database + "/estornos_baixas/" + privilege + "/NO");
+        }
         await using (var command = connection.CreateCommand())
         {
             command.CommandText = "SELECT TABLE_SCHEMA,TABLE_NAME,PRIVILEGE_TYPE,IS_GRANTABLE FROM information_schema.TABLE_PRIVILEGES WHERE GRANTEE=@grantee";
