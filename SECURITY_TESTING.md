@@ -9,14 +9,16 @@ O servidor permitido é localhost:3306. A API nunca usa root.
 | Tabelas | Development | Testing |
 |---|---|---|
 | empresas, usuarios, administradores_gerais | SELECT, INSERT, UPDATE | SELECT, INSERT, UPDATE |
-| lancamentos | SELECT, INSERT | SELECT, INSERT, UPDATE |
+| lancamentos | SELECT, INSERT, UPDATE | SELECT, INSERT, UPDATE |
 | auditoria | SELECT, INSERT | SELECT, INSERT |
 | categorias, centros_custo, clientes, fornecedores | SELECT | SELECT, INSERT |
-| baixas, contas_bancarias, formas_pagamento | nenhum | SELECT, INSERT |
+| baixas | SELECT | SELECT, INSERT |
+| contas_bancarias, formas_pagamento | nenhum | SELECT, INSERT |
 
 Os INSERT financeiros de Testing atendem fixtures e POST /lancamentos.
-Development permite inclusão em lancamentos e auditoria, com SELECT nas referências.
-UPDATE financeiro existe somente em lancamentos de Testing. Não há DELETE, DDL, GRANT OPTION,
+Development permite inclusão em lancamentos e auditoria, com SELECT nas referências
+e em baixas. UPDATE financeiro existe somente em lancamentos dos dois ambientes.
+Não há DELETE, DDL, GRANT OPTION,
 privilégios globais, de schema, de coluna ou papéis ativos nas contas da API.
 DatabaseSafety exige igualdade entre privilégios reais e autorizados.
 TestingWriteGuard verifica a conexão antes de SaveChangesAsync e recusa exclusões.
@@ -91,8 +93,8 @@ permanecem sob responsabilidade do operador, fora do repositório.
 `POST /lancamentos` está habilitado em Development e Testing. Nos demais ambientes,
 o serviço e o interceptor recusam gravação financeira. Cada ambiente exige sua
 conexão, identidade MySQL e privilégios exatos, sem acesso cruzado. O interceptor
-recusa UPDATE financeiro em Development e DELETE em ambos antes de abrir conexão;
-em Testing aceita somente os campos controlados de lancamentos ABERTO. Exige SaveChangesAsync.
+recusa DELETE e alteração da auditoria antes de abrir conexão; nos ambientes
+habilitados aceita somente campos controlados de lancamentos ABERTO. Exige SaveChangesAsync.
 Development recebeu exclusivamente INSERT em lancamentos, SELECT/INSERT em auditoria
 e SELECT nas quatro tabelas auxiliares; as permissões anteriores foram preservadas.
 
@@ -111,7 +113,7 @@ a mesma validação 400. Categoria precisa ser da empresa e compatível com o ti
 Campos desconhecidos, inclusive status, são recusados. Status inicial é ABERTO.
 
 O sucesso retorna 201, DTO e Location consultável pelo autor, incluindo empresaId
-no Location do ADMIN_GERAL. Edição e cancelamento existem somente em Testing, conforme
+no Location do ADMIN_GERAL. Edição e cancelamento existem nos dois ambientes, conforme
 a seção específica abaixo. Não há operação de baixas pela API.
 
 Testing recebeu a estrutura auditoria, sem dados originais, e somente SELECT/INSERT
@@ -182,7 +184,7 @@ Testes de carga e implantação com HTTPS exigem preparação própria. As ferra
 privadas, credenciais, JWTs e checkpoints cifrados permanecem fora dos arquivos publicados.
 
 
-## Edição e cancelamento em Testing
+## Edição e cancelamento em Development e Testing
 
 PUT /lancamentos/{id} usa AtualizarLancamentoRequest. POST
 /lancamentos/{id}/cancelamento usa CancelarLancamentoRequest (corpo `{}` para usuário
@@ -203,10 +205,11 @@ contas_bancarias, formas_pagamento e baixas, compatíveis com o DDL original e s
 registros originais. A conta Testing recebeu SELECT/INSERT nessas tabelas para as
 fixtures e UPDATE somente em lancamentos. A aplicação apenas lê baixas, e o interceptor
 recusa sua escrita via EF; as fixtures inserem somente novos registros fictícios.
-Auditoria permanece append-only. Não houve alteração de dados, estruturas ou permissões
-em Development; seus nove lançamentos e sua auditoria anterior foram preservados.
+Auditoria permanece append-only. Na implementação original desta etapa, não houve
+alteração em Development. A ativação posterior acrescenta somente as duas permissões
+documentadas abaixo; os nove lançamentos e a auditoria continuam preservados.
 
-AlteracaoLancamentoService verifica Testing antes de acessar o banco, exige a conta
+AlteracaoLancamentoService verifica a política do ambiente antes de acessar o banco, exige a conta
 e o destino exatos e usa transação Serializable e SELECT FOR UPDATE filtrado por
 empresa e ID. A leitura de baixas e das referências ocorre dentro da transação.
 Operações concorrentes sobre o mesmo lançamento são serializadas; cancelamento
@@ -219,23 +222,23 @@ O UPDATE e a auditoria pertencem à mesma transação. A simulação de falha oc
 o UPDATE e confirma rollback integral para edição e cancelamento. Não há JWTs ou
 segredos nos detalhes. Cancelamento mantém registro, referências e histórico.
 
-Os testes usam somente Testing, inclusive para simular o serviço/interceptor em
-Development sem conexão ao banco original. Cobrem quatro perfis, duas empresas,
+Os testes funcionais de escrita usam somente Testing, inclusive para comprovar que
+o serviço/interceptor Development rejeita conexão Testing. Cobrem quatro perfis, duas empresas,
 JWT inválido e expirado, referências cruzadas, valores/datas inválidos, imutabilidade,
 status bloqueados, baixas, duplicidade, auditoria, rollback, concorrência e bloqueios
 após revogação/inativação de usuário, empresa e administrador geral. Checkpoints
 privados verificam fixtures anteriores e o banco original, sem publicar seus dados.
 
-Resultado desta etapa: 59 verificações de consultas, 51 de cadastro/segurança,
+Resultado da implementação inicial: 59 verificações de consultas, 51 de cadastro/segurança,
 86 de edição/cancelamento e 66 de login/regressão: 262 aprovadas, zero reprovadas.
 Build --no-restore --nologo: zero erros e zero avisos. O middleware em HTTP local
 continua emitindo o aviso de porta HTTPS não determinada; não é aviso de compilação.
-As fixtures novas são mantidas e acumulam a cada rodada. PARCIAL, estornos, baixas pela
-API e habilitação de edição/cancelamento em Development permanecem fora do escopo.
+As fixtures novas são mantidas e acumulam a cada rodada. PARCIAL, estornos e baixas
+pela API permanecem fora do escopo. A ativação técnica de Development está descrita abaixo.
 
-## Preparação de Development sem ativação
+## Histórico: preparação de Development sem ativação
 
-`FinancialUpdatePolicy.DevelopmentEnabled` está fixado em `false` nesta versão.
+Na versão de preparação, `FinancialUpdatePolicy.DevelopmentEnabled` estava em `false`.
 O serviço e o interceptor usam a mesma política; não há parâmetro HTTP, chave de
 configuração ou variável de ambiente que permita habilitá-la. Production e ambientes
 desconhecidos permanecem bloqueados. Endpoints, autorização, regras financeiras,
@@ -261,16 +264,17 @@ antes/depois confirmou os dados, estruturas e privilégios de Development intact
 assim como os privilégios de Testing e suas fixtures anteriores. O aviso de porta
 HTTPS em HTTP local permanece; não é aviso do build.
 
-## Ativação futura em Development
+## Procedimento de ativação em Development
 
-Procedimento documentado para execução posterior, **não executado nesta etapa**:
+Procedimento da ativação autorizada. As concessões abaixo são administrativas;
+a API nunca recebe credenciais administrativas nem executa GRANT:
 
 1. Obter autorização específica para a ativação e as duas concessões. Confirmar
    destino, identidade, privilégios, backup recuperável e estado dos registros.
 2. Preparar uma versão com `FinancialUpdatePolicy.DevelopmentEnabled` em `true`.
-   Adaptar os testes que hoje exigem Development bloqueado e comprovar o caminho
-   habilitado, isolamento de conexões, regras, auditoria e rollback em ambiente
-   isolado. Não reutilizar esta preparação como evidência de ativação já testada.
+   Adaptar os testes de Development para exigir a recusa de conexões Testing no
+   serviço e no interceptor. Comprovar regras, auditoria, rollback e concorrência
+   em Testing; não executar operações financeiras efetivas no banco original.
 3. Interromper a API Development e aguardar o término das operações em andamento.
    Com credencial administrativa externa à API, executar somente as concessões:
 
@@ -287,10 +291,10 @@ Procedimento documentado para execução posterior, **não executado nesta etapa
    anteriores, inclusive SELECT/INSERT em auditoria e o cadastro financeiro.
 5. Validar autenticação e consultas. Qualquer PUT ou cancelamento controlado em
    Development dependerá da autorização posterior para registros e dados específicos;
-   não é parte desta preparação. Se banco e binário não corresponderem à mesma
+   não faz parte desta ativação. Se banco e binário não corresponderem à mesma
    matriz, a API deve recusar a conexão, sem relaxar DatabaseSafety.
 
-## Reversão segura da ativação futura
+## Reversão segura da ativação
 
 Com a API parada e sem operações em andamento, publicar novamente a política com
 `DevelopmentEnabled` em `false` e remover **somente** as duas concessões novas:
@@ -307,3 +311,42 @@ pelos procedimentos autorizados. Não revogar privilégios preexistentes nem alt
 Testing. Não apagar lançamentos ou auditorias e não tentar desfazer operações já
 confirmadas por SQL: qualquer correção financeira exige uma autorização própria.
 A reversão acima limita a capacidade futura de alteração; preserva o histórico.
+
+## Validação da ativação — 2026-11-14
+
+A ativação autorizada publicou a política em true e aplicou exclusivamente UPDATE
+em gestao_financeira_empresarial.lancamentos e SELECT em
+gestao_financeira_empresarial.baixas para gestao_api_dev@localhost. Os privilégios
+anteriores e a conta Testing permaneceram iguais. Não foram concedidos DELETE,
+DDL, privilégios globais, papéis, GRANT OPTION ou acesso cruzado. A inicialização
+da API Development confirmou a matriz exata através de DatabaseSafety.
+
+A suíte final em Testing aprovou 266 verificações: 59 de consultas, 51 de cadastro,
+90 de edição/cancelamento/segurança e 66 de login/regressão, sem reprovações. Além
+das regras financeiras, auditoria, rollback e concorrência anteriores, os testes
+confirmam que o serviço e o interceptor Development rejeitam conexão Testing, que
+CONSULTA é recusado antes de acessar o banco e que Production/Staging não são liberados.
+Durante a adaptação houve uma asserção intermediária incorreta sobre ForbidHttpResult;
+ela foi corrigida e a suíte completa foi repetida com sucesso. Não foi uma liberação
+indevida de acesso. O build final passou com zero erros e zero avisos; permanece o
+aviso de porta HTTPS não determinada na execução HTTP local de Testing.
+
+A API Development iniciou em localhost:5216 e aprovou 18 verificações HTTP: sessão
+JWT do ADMIN renovada pelo login normal, GETs, registro das duas rotas no OpenAPI,
+401 sem autenticação/JWT inválido, 400 para escopo empresarial indevido, 403 para
+consulta de outra empresa, 404 para ID inexistente e 405 para DELETE sem rota.
+Todos os PUT/POST de cancelamento e DELETE negativos apontaram exclusivamente para
+um ID previamente confirmado inexistente; nenhum lançamento real foi alvo dessas
+requisições. Não foram executados cadastro, edição ou cancelamento efetivos em Development.
+
+Development possui apenas ADMIN ativo. Não se criou ou ativou CONSULTA para testes;
+não houve teste HTTP com esse perfil nesse banco. Sua recusa foi comprovada em
+Testing por HTTP e diretamente no serviço com ambiente Development e contexto
+Testing. A execução financeira autorizada em registro real não foi validada, por
+restrição expressa desta ativação. Não se presume essa validação como realizada.
+
+A comparação antes/depois confirmou todos os dados e estruturas originais idênticos,
+inclusive nove lançamentos e uma auditoria, além das fixtures anteriores de Testing.
+Somente novas fixtures fictícias foram inseridas/alteradas nas rodadas Testing.
+Uma operação futura em Development exige autorização específica sobre registros e
+dados. Estornos e novas regras de saldo continuam fora do escopo.

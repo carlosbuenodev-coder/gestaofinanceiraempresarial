@@ -25,8 +25,8 @@ controle de acesso por perfil e empresa. O projeto está em desenvolvimento.
 
 O cadastro financeiro está habilitado em Development e Testing, com contas, bancos
 e chaves JWT separados. O serviço e o interceptor validam a conexão correspondente
-ao ambiente. Edição e cancelamento são exclusivos de Testing; Development continua
-sem UPDATE financeiro. DELETE financeiro permanece bloqueado em ambos. As regras anteriores
+ao ambiente. Edição e cancelamento estão habilitados em Development e Testing.
+DELETE financeiro permanece bloqueado em ambos. As regras anteriores
 de administração de empresas e usuários
 permanecem preservadas. ADMIN_GERAL informa empresaId na query dos GETs e no corpo JSON
 do POST; usuários empresariais usam a empresa do JWT e não podem informar empresaId no POST.
@@ -62,7 +62,8 @@ e, para o inicializador publicado, Windows PowerShell com execução de scripts 
 
 A configuracao atual exige MySQL em localhost:3306 e privilegios exatos por tabela.
 As tres tabelas de seguranca preservam SELECT, INSERT e UPDATE. Development tem
-SELECT/INSERT em lancamentos e auditoria e SELECT nas quatro tabelas auxiliares.
+SELECT/INSERT/UPDATE em lancamentos, SELECT/INSERT em auditoria, SELECT em baixas
+e nas quatro tabelas auxiliares. Baixas não recebe permissão de escrita em Development.
 Testing acrescenta UPDATE somente em lancamentos e SELECT/INSERT em baixas,
 contas_bancarias e formas_pagamento para consultas e novas fixtures fictícias.
 Nao ha privilegios globais, de schema ou concessao, nem papeis ativos.
@@ -144,8 +145,9 @@ saldo ou baixas. O detalhe devolve um DTO sem dados de autenticacao.
 Exemplo: `/lancamentos?tipo=RECEITA&status=ABERTO&vencimentoInicio=2026-01-01&pagina=1&tamanhoPagina=20`.
 Para ADMIN_GERAL, acrescente `empresaId` em lista e detalhe.
 
-Development tem SELECT/INSERT em lancamentos e auditoria e somente SELECT nas tabelas
-auxiliares. Testing permite também UPDATE de lancamentos; auditoria continua somente SELECT/INSERT.
+Development tem SELECT/INSERT/UPDATE em lancamentos, SELECT/INSERT em auditoria
+e somente SELECT em baixas e nas tabelas auxiliares. Testing mantém UPDATE somente
+em lancamentos; auditoria continua somente SELECT/INSERT.
 Consulte a matriz exata e o procedimento
 seguro de execucao em [SECURITY_TESTING.md](SECURITY_TESTING.md).
 
@@ -174,19 +176,19 @@ Os testes funcionais gravam somente novas fixtures em Testing. Em 2026-11-14,
 um único cadastro fictício expressamente autorizado em Development retornou 201
 (lançamento 9), com GET 200 e auditoria 1. Os oito lançamentos anteriores e os demais
 registros e estruturas foram preservados.
-UPDATE financeiro permanece bloqueado em Development, e DELETE em ambos os ambientes.
+UPDATE financeiro está restrito a lancamentos; DELETE permanece bloqueado em ambos.
 As regras e testes estao descritos
 em [SECURITY_TESTING.md](SECURITY_TESTING.md).
 
 
-## Edição e cancelamento exclusivos de Testing
+## Edição e cancelamento em Development e Testing
 
 `PUT /lancamentos/{id}` substitui os campos editáveis e retorna 200 com DTO.
 `POST /lancamentos/{id}/cancelamento` retorna 200 com o registro preservado e status
 CANCELADO. Ambos exigem JWT válido, perfil atual ADMIN/FINANCEIRO da própria empresa
 ou ADMIN_GERAL ativo com empresaId explícito no corpo JSON. CONSULTA recebe 403.
 Empresa e usuário devem estar ativos. O escopo não é aceito na query dessas operações.
-Em Development e demais ambientes, o serviço retorna 403 antes de acessar o banco.
+Em outros ambientes, o serviço retorna 403 antes de acessar o banco.
 GETs e POST de cadastro permanecem disponíveis nos ambientes anteriores.
 
 Exemplo de PUT em Testing (IDs devem ser de fixtures da mesma empresa):
@@ -228,27 +230,29 @@ dotnet build --no-restore --nologo
 .\scripts\Start-SecurityEnvironment.ps1 -Environment Testing -RunTests
 ```
 
-A rodada desta entrega aprovou 262 verificações (59 consultas, 51 cadastro/segurança,
+A rodada da implementação inicial aprovou 262 verificações (59 consultas, 51 cadastro/segurança,
 86 edição/cancelamento e 66 de login e regressão), sem reprovações. O build passou sem
 avisos; o aviso de HTTPS em HTTP local permanece documentado. Consulte
 [SECURITY_TESTING.md](SECURITY_TESTING.md) para permissões, preparação e limitações.
 
-## Preparação de edição e cancelamento em Development
+## Ativação técnica de Development
 
-Edição e cancelamento continuam disponíveis somente em Testing. Esta preparação
-centraliza o bloqueio no serviço e no interceptor em `FinancialUpdatePolicy`;
-`DevelopmentEnabled` permanece `false`, sem opção de ativação por configuração,
-variável de ambiente ou requisição. Development continua com GET e cadastro nas
-condições anteriores; não recebeu PUT, cancelamento ou novas permissões.
+`FinancialUpdatePolicy.DevelopmentEnabled` está em `true`. Serviço, interceptor e
+DatabaseSafety exigem ambiente, conta, banco e matriz exata correspondentes. A
+ativação acrescenta somente UPDATE em lancamentos e SELECT em baixas para
+gestao_api_dev; não concede DELETE, escrita em baixas ou acesso a Testing.
 
-O serviço já seleciona a validação de banco/conta conforme o ambiente. A matriz futura
-de `DatabaseSafety` está preparada para exigir, somente após ativação autorizada,
-UPDATE em `lancamentos` e SELECT em `baixas`. A leitura de baixas é indispensável para
-bloquear lançamentos com pagamentos; nenhuma escrita em baixas é necessária.
-Enquanto `DevelopmentEnabled` estiver `false`, essas permissões extras são recusadas.
+Os testes funcionais de escrita continuam exclusivos de Testing. Esta ativação
+não autoriza editar ou cancelar nenhum dos nove lançamentos de Development, nem
+criar fixtures nesse banco. Sua auditoria e todos os registros existentes devem
+permanecer preservados. A execução de uma operação real exige autorização própria.
 
-A ativação efetiva exige uma entrega posterior autorizada: alteração explícita do
-bloqueio no código, validação dessa versão, concessões mínimas e reinício controlado
-da API com a matriz de privilégios correspondente. Nenhuma dessas ativações ou
-concessões foi executada nesta preparação. O procedimento de ativação e reversão
-está em [SECURITY_TESTING.md](SECURITY_TESTING.md#ativação-futura-em-development).
+O procedimento de ativação, as validações e a reversão segura estão em
+[SECURITY_TESTING.md](SECURITY_TESTING.md#procedimento-de-ativação-em-development).
+
+A suíte final desta ativação aprovou 266 verificações em Testing, sem reprovações.
+Development iniciou com a matriz autorizada e passou por 18 verificações HTTP de
+consulta, autenticação, endpoints e bloqueios seguros, sem escrita financeira.
+Os nove lançamentos, a auditoria e as demais estruturas e registros foram preservados.
+Não há CONSULTA ativo em Development: o bloqueio desse perfil foi comprovado por HTTP
+em Testing e no serviço Development usando contexto Testing, sem criar usuários reais.

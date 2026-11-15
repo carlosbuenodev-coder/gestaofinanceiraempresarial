@@ -78,7 +78,7 @@ public static class DatabaseSafety
         }
         else if (FinancialUpdatePolicy.DevelopmentEnabled)
         {
-            // Prepared, but unreachable while the Development gate remains off.
+            // Activated Development requires only these two additional privileges.
             // Do not accept optional extra grants: the authorized set must match exactly.
             expected.Add(database + "/lancamentos/UPDATE/NO");
             expected.Add(database + "/baixas/SELECT/NO");

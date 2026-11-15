@@ -23,7 +23,11 @@ public static class AlteracaoLancamentosTestingScenario
         var checks = 0;
         static void Check(bool valid, string label)
         {
-            if (!valid) throw new InvalidOperationException("Alteração financeira: " + label);
+            if (!valid)
+            {
+                Console.WriteLine("[FALHOU] Alteração financeira: " + label);
+                throw new InvalidOperationException("Alteração financeira: " + label);
+            }
         }
         async Task<long> Insert(string sql, params object[] values)
         {
@@ -182,15 +186,41 @@ public static class AlteracaoLancamentosTestingScenario
         }
         finally { foreach (var r in races) r.Dispose(); }
         // Check application environment guards against a real Testing context, never a Development DB.
-        foreach (var env in new[] { "Development", "Production" })
+        var developmentIdentity = new ClaimsPrincipal(new ClaimsIdentity(new[] {
+            new Claim(ClaimTypes.NameIdentifier, adminId.ToString()), new Claim(ClaimTypes.Role, "ADMIN"),
+            new Claim("empresa_id", a.ToString()), new Claim("tipo_usuario", "EMPRESA") }, "Test"));
+        foreach (var env in new[] { "Production", "Staging" })
         {
             var before = await Snapshot(db);
             var service = new AlteracaoLancamentoService(db, new Microsoft.Extensions.Hosting.Internal.HostingEnvironment { EnvironmentName = env });
-            Check(await service.AtualizarAsync(current, body, new ClaimsPrincipal(), default) is IStatusCodeHttpResult { StatusCode: 403 }, "ambiente liberou PUT");
-            Check(await service.CancelarAsync(current, new(), new ClaimsPrincipal(), default) is IStatusCodeHttpResult { StatusCode: 403 }, "ambiente liberou cancelamento");
+            Check(await service.AtualizarAsync(current, body, developmentIdentity, default) is IStatusCodeHttpResult { StatusCode: 403 }, "ambiente liberou PUT");
+            Check(await service.CancelarAsync(current, new(), developmentIdentity, default) is IStatusCodeHttpResult { StatusCode: 403 }, "ambiente liberou cancelamento");
             Check(before == await Snapshot(db), "ambiente bloqueado gravou dados"); checks += 2;
         }
-        // A valid editable change must still be refused by the Development interceptor before SQL.
+        // Enabled Development must reject a Testing connection, without writing to either database.
+        var developmentService = new AlteracaoLancamentoService(db,
+            new Microsoft.Extensions.Hosting.Internal.HostingEnvironment { EnvironmentName = "Development" });
+        var consultaIdentity = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(ClaimTypes.Role, "CONSULTA")], "Test"));
+        var beforeConsulta = await Snapshot(db);
+        Check(await developmentService.AtualizarAsync(current, body, consultaIdentity, default)
+            is Microsoft.AspNetCore.Http.HttpResults.ForbidHttpResult, "Development liberou edição para CONSULTA");
+        Check(await developmentService.CancelarAsync(current, new(), consultaIdentity, default)
+            is Microsoft.AspNetCore.Http.HttpResults.ForbidHttpResult, "Development liberou cancelamento para CONSULTA");
+        Check(beforeConsulta == await Snapshot(db), "CONSULTA alterou dados"); checks += 2;
+        foreach (var cancel in new[] { false, true })
+        {
+            var before = await Snapshot(db);
+            var rejected = false;
+            try
+            {
+                if (cancel) await developmentService.CancelarAsync(current, new(), developmentIdentity, default);
+                else await developmentService.AtualizarAsync(current, body, developmentIdentity, default);
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("Conexão recusada")) { rejected = true; }
+            Check(rejected && before == await Snapshot(db), "Development aceitou conexão Testing"); checks++;
+        }
+        // The interceptor must independently refuse the wrong destination before any SQL writes.
         foreach (var cancel in new[] { false, true })
         {
             var options = new DbContextOptionsBuilder<GestaoFinanceiraContext>().UseMySQL(db.Database.GetConnectionString()!)
@@ -199,10 +229,11 @@ public static class AlteracaoLancamentosTestingScenario
             var stub = new Lancamento { Id = current, Status = "ABERTO", Descricao = "Antes" };
             guarded.Attach(stub); if (cancel) stub.Status = "CANCELADO"; else stub.Descricao = "Depois";
             var rejected = false;
-            try { await guarded.SaveChangesAsync(); } catch (InvalidOperationException) { rejected = true; }
-            Check(rejected && guarded.Database.GetDbConnection().State == System.Data.ConnectionState.Closed, "interceptor Development liberou alteração"); checks++;
+            try { await guarded.SaveChangesAsync(); }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("Conexão recusada")) { rejected = true; }
+            Check(rejected && guarded.Database.GetDbConnection().State == System.Data.ConnectionState.Closed, "interceptor Development aceitou conexão Testing"); checks++;
         }
-        Console.WriteLine($"[OK] ALTERACAO_FINANCE_SCENARIO: {checks} casos aprovados; edição, cancelamento, JWT, referências, baixas, auditoria, rollback, concorrência e bloqueio de Development.");
+        Console.WriteLine($"[OK] ALTERACAO_FINANCE_SCENARIO: {checks} casos aprovados; edição, cancelamento, JWT, referências, baixas, auditoria, rollback, concorrência e isolamento dos ambientes.");
     }
 
     internal static async Task<string> Snapshot(GestaoFinanceiraContext db)
