@@ -232,3 +232,78 @@ Build --no-restore --nologo: zero erros e zero avisos. O middleware em HTTP loca
 continua emitindo o aviso de porta HTTPS não determinada; não é aviso de compilação.
 As fixtures novas são mantidas e acumulam a cada rodada. PARCIAL, estornos, baixas pela
 API e habilitação de edição/cancelamento em Development permanecem fora do escopo.
+
+## Preparação de Development sem ativação
+
+`FinancialUpdatePolicy.DevelopmentEnabled` está fixado em `false` nesta versão.
+O serviço e o interceptor usam a mesma política; não há parâmetro HTTP, chave de
+configuração ou variável de ambiente que permita habilitá-la. Production e ambientes
+desconhecidos permanecem bloqueados. Endpoints, autorização, regras financeiras,
+transação, bloqueios e auditoria de Testing foram preservados.
+
+O serviço de alteração passa a escolher a verificação de conexão pelo ambiente,
+sem fallback de Testing para Development. O ramo futuro de DatabaseSafety exige
+as duas permissões adicionais exatas abaixo somente quando a ativação for publicada.
+Nesta preparação, a matriz efetiva permanece a da tabela inicial: Development não
+tem UPDATE em lancamentos nem SELECT em baixas, e concessões extras impedem a
+inicialização. As permissões antigas de empresas, usuários e auditoria não mudam.
+
+Não foram executados PUT, cancelamento, migrações, mudanças de permissões, estruturas
+ou registros em Development. Os nove lançamentos, a auditoria e as demais tabelas e
+views são preservados. A regressão usa somente Testing e novas fixtures fictícias;
+os testes de bloqueio de Development usam contexto Testing e confirmam recusa antes
+de emitir SQL, sem testar escrita contra o banco original.
+
+A regressão desta preparação aprovou novamente 262 verificações: 59 de consultas,
+51 de cadastro/segurança, 86 de edição/cancelamento e 66 de login/regressão, sem
+reprovações. O build --no-restore --nologo passou sem erros ou avisos. A comparação
+antes/depois confirmou os dados, estruturas e privilégios de Development intactos,
+assim como os privilégios de Testing e suas fixtures anteriores. O aviso de porta
+HTTPS em HTTP local permanece; não é aviso do build.
+
+## Ativação futura em Development
+
+Procedimento documentado para execução posterior, **não executado nesta etapa**:
+
+1. Obter autorização específica para a ativação e as duas concessões. Confirmar
+   destino, identidade, privilégios, backup recuperável e estado dos registros.
+2. Preparar uma versão com `FinancialUpdatePolicy.DevelopmentEnabled` em `true`.
+   Adaptar os testes que hoje exigem Development bloqueado e comprovar o caminho
+   habilitado, isolamento de conexões, regras, auditoria e rollback em ambiente
+   isolado. Não reutilizar esta preparação como evidência de ativação já testada.
+3. Interromper a API Development e aguardar o término das operações em andamento.
+   Com credencial administrativa externa à API, executar somente as concessões:
+
+   ```sql
+   GRANT UPDATE ON `gestao_financeira_empresarial`.`lancamentos`
+     TO 'gestao_api_dev'@'localhost';
+   GRANT SELECT ON `gestao_financeira_empresarial`.`baixas`
+     TO 'gestao_api_dev'@'localhost';
+   ```
+
+4. Conferir a matriz exata e publicar/iniciar a versão habilitada. Não conceder
+   INSERT/UPDATE/DELETE em baixas, UPDATE em outras tabelas, DELETE, privilégios
+   globais, administrativos ou acesso a outros bancos. Preservar os privilégios
+   anteriores, inclusive SELECT/INSERT em auditoria e o cadastro financeiro.
+5. Validar autenticação e consultas. Qualquer PUT ou cancelamento controlado em
+   Development dependerá da autorização posterior para registros e dados específicos;
+   não é parte desta preparação. Se banco e binário não corresponderem à mesma
+   matriz, a API deve recusar a conexão, sem relaxar DatabaseSafety.
+
+## Reversão segura da ativação futura
+
+Com a API parada e sem operações em andamento, publicar novamente a política com
+`DevelopmentEnabled` em `false` e remover **somente** as duas concessões novas:
+
+```sql
+REVOKE UPDATE ON `gestao_financeira_empresarial`.`lancamentos`
+  FROM 'gestao_api_dev'@'localhost';
+REVOKE SELECT ON `gestao_financeira_empresarial`.`baixas`
+  FROM 'gestao_api_dev'@'localhost';
+```
+
+Confirmar a matriz original, reiniciar com o bloqueio ativo e validar GET/cadastro
+pelos procedimentos autorizados. Não revogar privilégios preexistentes nem alterar
+Testing. Não apagar lançamentos ou auditorias e não tentar desfazer operações já
+confirmadas por SQL: qualquer correção financeira exige uma autorização própria.
+A reversão acima limita a capacidade futura de alteração; preserva o histórico.

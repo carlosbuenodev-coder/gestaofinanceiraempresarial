@@ -232,3 +232,23 @@ A rodada desta entrega aprovou 262 verificações (59 consultas, 51 cadastro/seg
 86 edição/cancelamento e 66 de login e regressão), sem reprovações. O build passou sem
 avisos; o aviso de HTTPS em HTTP local permanece documentado. Consulte
 [SECURITY_TESTING.md](SECURITY_TESTING.md) para permissões, preparação e limitações.
+
+## Preparação de edição e cancelamento em Development
+
+Edição e cancelamento continuam disponíveis somente em Testing. Esta preparação
+centraliza o bloqueio no serviço e no interceptor em `FinancialUpdatePolicy`;
+`DevelopmentEnabled` permanece `false`, sem opção de ativação por configuração,
+variável de ambiente ou requisição. Development continua com GET e cadastro nas
+condições anteriores; não recebeu PUT, cancelamento ou novas permissões.
+
+O serviço já seleciona a validação de banco/conta conforme o ambiente. A matriz futura
+de `DatabaseSafety` está preparada para exigir, somente após ativação autorizada,
+UPDATE em `lancamentos` e SELECT em `baixas`. A leitura de baixas é indispensável para
+bloquear lançamentos com pagamentos; nenhuma escrita em baixas é necessária.
+Enquanto `DevelopmentEnabled` estiver `false`, essas permissões extras são recusadas.
+
+A ativação efetiva exige uma entrega posterior autorizada: alteração explícita do
+bloqueio no código, validação dessa versão, concessões mínimas e reinício controlado
+da API com a matriz de privilégios correspondente. Nenhuma dessas ativações ou
+concessões foi executada nesta preparação. O procedimento de ativação e reversão
+está em [SECURITY_TESTING.md](SECURITY_TESTING.md#ativação-futura-em-development).

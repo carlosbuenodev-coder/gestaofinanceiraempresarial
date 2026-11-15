@@ -76,6 +76,13 @@ public static class DatabaseSafety
                 foreach (var privilege in new[] { "SELECT", "INSERT" })
                     expected.Add(database + "/" + table + "/" + privilege + "/NO");
         }
+        else if (FinancialUpdatePolicy.DevelopmentEnabled)
+        {
+            // Prepared, but unreachable while the Development gate remains off.
+            // Do not accept optional extra grants: the authorized set must match exactly.
+            expected.Add(database + "/lancamentos/UPDATE/NO");
+            expected.Add(database + "/baixas/SELECT/NO");
+        }
         await using (var command = connection.CreateCommand())
         {
             command.CommandText = "SELECT TABLE_SCHEMA,TABLE_NAME,PRIVILEGE_TYPE,IS_GRANTABLE FROM information_schema.TABLE_PRIVILEGES WHERE GRANTEE=@grantee";

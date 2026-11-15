@@ -21,8 +21,9 @@ public sealed class AlteracaoLancamentoService(GestaoFinanceiraContext db, IHost
         ClaimsPrincipal principal, CancellationToken ct)
     {
         // Must run before database access, including when a Testing connection is injected.
-        if (!environment.IsEnvironment("Testing"))
-            return Results.Problem("Edição e cancelamento disponíveis somente em Testing.", statusCode: 403);
+        if (!FinancialUpdatePolicy.AllowsUpdates(environment.EnvironmentName))
+            return Results.Problem("Edição e cancelamento não habilitados neste ambiente.", statusCode: 403);
+        var testing = environment.IsEnvironment("Testing");
         var perfil = principal.FindFirstValue(ClaimTypes.Role);
         if (perfil is not ("ADMIN" or "FINANCEIRO" or "ADMIN_GERAL")) return Results.Forbid();
         if (empresaId <= 0 || (perfil != "ADMIN_GERAL" && empresaId.HasValue))
@@ -32,9 +33,9 @@ public sealed class AlteracaoLancamentoService(GestaoFinanceiraContext db, IHost
             var erros = request.ComoCadastro("RECEITA").Validar();
             if (erros.Count > 0) return Results.ValidationProblem(erros);
         }
-        await DatabaseSafety.VerifyAsync(db.Database.GetConnectionString()!, true);
+        await DatabaseSafety.VerifyAsync(db.Database.GetConnectionString()!, testing);
         await db.Database.OpenConnectionAsync(ct);
-        await DatabaseSafety.VerifyOpenAsync(db.Database.GetDbConnection(), true);
+        await DatabaseSafety.VerifyOpenAsync(db.Database.GetDbConnection(), testing);
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
         try
         {

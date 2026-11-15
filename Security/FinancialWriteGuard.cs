@@ -28,8 +28,9 @@ public sealed class FinancialWriteGuard(string environmentName) : SaveChangesInt
         foreach (var entry in db.ChangeTracker.Entries().Where(e => e.Entity is Lancamento or Auditoria))
         {
             if (entry.State == EntityState.Deleted ||
-                (entry.State == EntityState.Modified && (!testing || entry.Entity is Auditoria)))
-                throw new InvalidOperationException("Somente inclusão em Development; exclusão e alteração de auditoria são proibidas.");
+                (entry.State == EntityState.Modified &&
+                    (!FinancialUpdatePolicy.AllowsUpdates(environmentName) || entry.Entity is Auditoria)))
+                throw new InvalidOperationException("Somente alterações financeiras expressamente habilitadas; exclusão e alteração de auditoria são proibidas.");
             if (entry.State != EntityState.Modified) continue;
             string[] editaveis = ["Descricao", "CategoriaId", "ClienteId", "FornecedorId", "CentroCustoId",
                 "DataEmissao", "DataVencimento", "Valor", "Observacoes", "Status"];
@@ -37,7 +38,7 @@ public sealed class FinancialWriteGuard(string environmentName) : SaveChangesInt
             if (entry.Properties.Any(p => p.IsModified && !editaveis.Contains(p.Metadata.Name)) ||
                 (string?)status.OriginalValue != "ABERTO" ||
                 (status.IsModified && (string?)status.CurrentValue != "CANCELADO"))
-                throw new InvalidOperationException("Somente campos editáveis de lançamentos ABERTO podem mudar em Testing.");
+                throw new InvalidOperationException("Somente campos editáveis de lançamentos ABERTO podem mudar em ambiente habilitado.");
         }
         await DatabaseSafety.VerifyAsync(db.Database.GetConnectionString()!, testing);
         if (db.Database.GetDbConnection().State != System.Data.ConnectionState.Open)
