@@ -71,6 +71,8 @@ public static class DatabaseSafety
         }
         if (testing)
         {
+            expected.Add(database + "/estornos_baixas/SELECT/NO");
+            expected.Add(database + "/estornos_baixas/INSERT/NO");
             expected.Add(database + "/lancamentos/UPDATE/NO");
             foreach (var table in new[] { "baixas", "contas_bancarias", "formas_pagamento" })
                 foreach (var privilege in new[] { "SELECT", "INSERT" })

@@ -36,6 +36,7 @@ if (testing)
 
 builder.Services.AddScoped<CadastroLancamentoService>();
 builder.Services.AddScoped<AlteracaoLancamentoService>();
+builder.Services.AddScoped<BaixasService>();
 var auditFailure = testing && args.Contains("--security-tests") ? new AuditFailureInterceptor() : null;
 if (auditFailure is not null) builder.Services.AddSingleton(auditFailure);
 builder.Services.AddDbContext<GestaoFinanceiraContext>(options =>
@@ -133,6 +134,7 @@ app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapLancamentos();
+app.MapBaixas();
 
 // Login público: valida a senha sem devolver hash ou outros dados sensíveis.
 app.MapPost("/auth/admin/login", async (

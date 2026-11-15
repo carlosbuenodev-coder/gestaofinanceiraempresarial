@@ -239,7 +239,7 @@ public static class AlteracaoLancamentosTestingScenario
     internal static async Task<string> Snapshot(GestaoFinanceiraContext db)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        foreach (var table in new[] { "lancamentos", "auditoria", "baixas", "contas_bancarias", "formas_pagamento" })
+        foreach (var table in new[] { "lancamentos", "auditoria", "baixas", "estornos_baixas", "contas_bancarias", "formas_pagamento" })
         {
             await using var cmd = db.Database.GetDbConnection().CreateCommand(); cmd.CommandText = $"SELECT * FROM `{table}` ORDER BY id";
             await using var reader = await cmd.ExecuteReaderAsync();

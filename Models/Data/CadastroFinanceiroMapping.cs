@@ -12,6 +12,29 @@ public static class CadastroFinanceiroMapping
         baixa.HasKey(x => x.Id);
         baixa.Property(x => x.Id).HasColumnName("id");
         baixa.Property(x => x.LancamentoId).HasColumnName("lancamento_id");
+        baixa.Property(x => x.ContaBancariaId).HasColumnName("conta_bancaria_id");
+        baixa.Property(x => x.FormaPagamentoId).HasColumnName("forma_pagamento_id");
+        baixa.Property(x => x.DataPagamento).HasColumnName("data_pagamento").HasColumnType("date");
+        baixa.Property(x => x.Valor).HasColumnName("valor").HasPrecision(15, 2);
+        baixa.Property(x => x.Juros).HasColumnName("juros").HasPrecision(15, 2);
+        baixa.Property(x => x.Multa).HasColumnName("multa").HasPrecision(15, 2);
+        baixa.Property(x => x.Desconto).HasColumnName("desconto").HasPrecision(15, 2);
+        baixa.Property(x => x.Observacoes).HasColumnName("observacoes").HasMaxLength(255);
+        var estorno = model.Entity<EstornoBaixa>();
+        estorno.ToTable("estornos_baixas");
+        estorno.HasKey(x => x.Id);
+        estorno.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+        estorno.Property(x => x.BaixaId).HasColumnName("baixa_id");
+        estorno.Property(x => x.Motivo).HasColumnName("motivo").HasMaxLength(500);
+        estorno.Property(x => x.CriadoEm).HasColumnName("criado_em").HasColumnType("datetime(6)");
+        estorno.HasIndex(x => x.BaixaId).IsUnique();
+        estorno.HasOne<BaixaFinanceira>().WithMany().HasForeignKey(x => x.BaixaId).OnDelete(DeleteBehavior.NoAction);
+        Referencia<ContaBancariaFinanceira>(model, "contas_bancarias");
+        model.Entity<ContaBancariaFinanceira>().Property(x => x.Ativo).HasColumnName("ativo").HasColumnType("tinyint(1)");
+        model.Entity<FormaPagamentoFinanceira>(e =>
+        {
+            e.ToTable("formas_pagamento"); e.HasKey(x => x.Id); e.Property(x => x.Id).HasColumnName("id");
+        });
         Referencia<CategoriaFinanceira>(model, "categorias");
         model.Entity<CategoriaFinanceira>().Property(x => x.Tipo).HasColumnName("tipo").HasColumnType("enum('RECEITA','DESPESA')");
         Referencia<ClienteFinanceiro>(model, "clientes");

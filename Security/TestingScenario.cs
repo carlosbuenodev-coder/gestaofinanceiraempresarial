@@ -90,6 +90,8 @@ public static class TestingScenario
             adminA.Id, financeA.Id, geral.Id, tokenA, tokenFinance, tokenConsulta, tokenGeral);
         await AlteracaoLancamentosTestingScenario.RunAsync(services, db, http, a.Id, b.Id,
             adminA.Id, financeA.Id, geral.Id, tokenA, tokenFinance, tokenConsulta, tokenB, tokenGeral);
+        await BaixasTestingScenario.RunAsync(services, db, http, a.Id, b.Id,
+            adminA.Id, financeA.Id, geral.Id, tokenA, tokenFinance, tokenConsulta, tokenB, tokenGeral);
         var postBody = new CriarLancamentoRequest("RECEITA", "Cadastro ficticio bloqueado", 1,
             DataEmissao: new DateOnly(2026, 11, 1), DataVencimento: new DateOnly(2026, 11, 30), Valor: 1);
         async Task AlteracoesRevogadas(string token, long? empresa = null)
@@ -100,6 +102,14 @@ public static class TestingScenario
                     DataEmissao: new DateOnly(2026, 11, 1), DataVencimento: new DateOnly(2026, 11, 30), Valor: 1, EmpresaId: empresa), 403);
             await Expect(HttpMethod.Post, $"/lancamentos/{long.MaxValue}/cancelamento", token,
                 new CancelarLancamentoRequest(empresa), 403);
+            await Expect(HttpMethod.Post, $"/lancamentos/{long.MaxValue}/baixas", token,
+                new CriarBaixaRequest(1, DataPagamento: new DateOnly(2026, 11, 14), Valor: 1, EmpresaId: empresa), 403);
+            await Expect(HttpMethod.Post, $"/baixas/{long.MaxValue}/estorno", token,
+                new EstornarBaixaRequest("Fictício bloqueado", empresa), 403);
+            var escopo = empresa.HasValue ? $"?empresaId={empresa}" : "";
+            await Expect(HttpMethod.Get, $"/lancamentos/{long.MaxValue}/baixas" + escopo, token, null, 403);
+            await Expect(HttpMethod.Get, $"/lancamentos/{long.MaxValue}/saldo" + escopo, token, null, 403);
+            await Expect(HttpMethod.Get, $"/baixas/{long.MaxValue}" + escopo, token, null, 403);
             if (before != await AlteracaoLancamentosTestingScenario.Snapshot(db))
                 throw new InvalidOperationException("Permissão revogada alterou dados financeiros.");
         }

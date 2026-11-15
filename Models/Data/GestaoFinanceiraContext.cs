@@ -15,6 +15,8 @@ namespace GestaoFinanceira.Data
 
         public DbSet<Usuario> Usuarios { get; set; }
         public DbSet<Lancamento> Lancamentos { get; set; }
+        // Internal transaction scope used only by the Testing payment service.
+        internal bool OperacaoBaixa { get; set; }
     
         public DbSet<AdministradorGeral> AdministradoresGerais { get; set; }
 

@@ -13,6 +13,7 @@ controle de acesso por perfil e empresa. O projeto está em desenvolvimento.
 - Consulta do próprio cadastro e listagem da própria empresa para ADMIN.
 - Isolamento por empresa do JWT e verificação do acesso atual do ADMIN no banco.
 - Development e Testing com contas MySQL, conexões e JWTs separados.
+- Baixas parciais/totais, saldo e estorno rastreável exclusivamente em Testing.
 
 ## Perfis e permissões atuais
 
@@ -216,7 +217,8 @@ ID, tipo, criadoEm e status não são aceitos no corpo. Campos desconhecidos rec
 Somente ABERTO sem qualquer baixa pode ser editado ou cancelado. PARCIAL é bloqueado
 até definição das regras de saldo; QUITADO, CANCELADO e cancelamento repetido recebem
 409. Referências de outra empresa, categoria incompatível, datas ou valores inválidos
-recebem 400; IDs ausentes ou fora da empresa recebem 404. Não há exclusão ou estorno.
+recebem 400; IDs ausentes ou fora da empresa recebem 404. Não há exclusão ou estorno
+do lançamento. O estorno de baixa existe somente no módulo Testing descrito abaixo.
 As validações de texto, datas e decimal(15,2) são as mesmas do cadastro.
 
 A transação serializável bloqueia o lançamento durante a operação e registra auditoria
@@ -256,3 +258,81 @@ consulta, autenticação, endpoints e bloqueios seguros, sem escrita financeira.
 Os nove lançamentos, a auditoria e as demais estruturas e registros foram preservados.
 Não há CONSULTA ativo em Development: o bloqueio desse perfil foi comprovado por HTTP
 em Testing e no serviço Development usando contexto Testing, sem criar usuários reais.
+
+## Baixas financeiras — somente Testing
+
+O módulo inteiro, incluindo consultas, retorna 403 fora de Testing após autenticação.
+As operações anteriores de lançamentos em Development continuam habilitadas; nenhuma
+permissão, estrutura ou registro desse banco foi alterado nesta entrega.
+
+| Método | Rota | Resposta |
+|---|---|---|
+| POST | `/lancamentos/{id}/baixas` | 201, baixa e saldo; Location do detalhe. |
+| GET | `/lancamentos/{id}/baixas` | 200, itens, total, pagina e tamanhoPagina. |
+| GET | `/lancamentos/{id}/saldo` | 200, valorOriginal, totalBaixado, saldoRestante e status. |
+| GET | `/baixas/{id}` | 200, DTO da baixa, incluindo estorno, motivo e data se houver. |
+| POST | `/baixas/{id}/estorno` | 200, baixa preservada marcada no DTO como estornada e saldo recalculado. |
+
+ADMIN e FINANCEIRO registram/estornam na própria empresa. ADMIN_GERAL exige empresaId
+explícito no JSON dos POSTs e na query dos GETs. CONSULTA só consulta a própria empresa.
+JWT, identidade, perfil e empresa atuais são conferidos. IDs fora do escopo recebem
+404; escopo indevido recebe 400/403. O escopo empresarial precede IDs, contagens e saldo.
+O cliente não pode mudar tipo, empresa ou status por meio desses contratos.
+
+Exemplo fictício de registro em Testing (conta e forma devem existir):
+
+```json
+{
+  "contaBancariaId": 1,
+  "formaPagamentoId": 1,
+  "dataPagamento": "2026-11-14",
+  "valor": 30.00,
+  "observacoes": "Recebimento fictício"
+}
+```
+
+Conta e data são obrigatórias; a conta deve estar ativa e pertencer à empresa.
+Forma de pagamento e observações são opcionais. A forma, quando enviada, precisa
+existir; seu catálogo é global, conforme o DDL real, sem coluna empresa_id.
+Observações têm até 255 caracteres. Datas usam yyyy-MM-dd (anos 1000–9999).
+Valor positivo deve caber em decimal(15,2), sem arredondamento silencioso.
+Campos desconhecidos, inclusive juros/multa/desconto ou status, recebem 400.
+
+Conforme a regra confirmada nesta entrega, totalBaixado soma **somente valor principal**
+das baixas não estornadas; saldoRestante = valorOriginal - totalBaixado. Novas baixas
+têm juros, multa e desconto zero. Os ajustes legados são expostos separadamente no
+DTO; não são somados ao principal nem alterados. As views originais não são usadas
+ou copiadas: sua fórmula de total com encargos não representa este contrato.
+
+Registro aceita ABERTO/PARCIAL e nunca ultrapassa o saldo. QUITADO/CANCELADO ou
+inconsistência entre principal, baixas e status recebem 409, sem correção automática.
+Sem baixas válidas o status é ABERTO; com saldo positivo, PARCIAL; saldo zero, QUITADO.
+CANCELADO não é recalculado automaticamente.
+
+Estorno exige um motivo com até 500 caracteres:
+
+```json
+{ "motivo": "Pagamento fictício registrado por engano" }
+```
+
+O estorno acrescenta um registro em estornos_baixas; não atualiza nem apaga a baixa.
+Não permite duplicidade, acesso entre empresas ou lançamento cancelado. Recalcula o
+saldo e o status, inclusive reabrindo um lançamento quitado. A listagem mantém todo
+o histórico, inclusive baixas estornadas. Edição/cancelamento do lançamento continuam
+conservadoramente bloqueados quando existe qualquer baixa, mesmo após seu estorno.
+
+Listagem aceita pagina (padrão 1) e tamanhoPagina (padrão 20, máximo 100), com ID
+ascendente e total da empresa antes da paginação. Parâmetros inválidos recebem 400.
+
+A transação bloqueia o lançamento com SELECT FOR UPDATE antes de ler o saldo e
+movimentá-lo. Baixa/estorno, status e auditorias pertencem à mesma transação; falha
+na auditoria desfaz todos os efeitos. A tabela complementar tem baixa_id único.
+Conflitos concorrentes recebem 409; erros de persistência, 500 genérico. Não existe
+chave de idempotência para reenvios: após timeout ou resultado inconclusivo, consulte
+o histórico e o saldo antes de decidir reenviar; a API não repete operações sozinha.
+
+Prepare somente a estrutura/permissões Testing descritas em SECURITY_TESTING.md e
+execute a suíte existente com `-Environment Testing -RunTests`. O repositório não
+provisiona bancos ao iniciar e nunca executa migração em Development. O módulo não
+calcula saldo bancário, não altera contas bancárias e não oferece encargos novos,
+transferências ou estorno de lançamento.

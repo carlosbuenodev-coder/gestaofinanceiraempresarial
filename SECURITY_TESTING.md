@@ -14,6 +14,7 @@ O servidor permitido é localhost:3306. A API nunca usa root.
 | categorias, centros_custo, clientes, fornecedores | SELECT | SELECT, INSERT |
 | baixas | SELECT | SELECT, INSERT |
 | contas_bancarias, formas_pagamento | nenhum | SELECT, INSERT |
+| estornos_baixas | nenhum | SELECT, INSERT |
 
 Os INSERT financeiros de Testing atendem fixtures e POST /lancamentos.
 Development permite inclusão em lancamentos e auditoria, com SELECT nas referências
@@ -25,7 +26,7 @@ TestingWriteGuard verifica a conexão antes de SaveChangesAsync e recusa exclus�
 
 Testing contém as três tabelas de segurança, auditoria e cinco tabelas financeiras:
 categorias, centros_custo, clientes, fornecedores e lancamentos, além de baixas,
-contas_bancarias e formas_pagamento adicionadas nesta etapa. Foram preservados
+contas_bancarias, formas_pagamento e a estrutura complementar estornos_baixas. Foram preservados
 tipos, índices e restrições do DDL financeiro; os contadores AUTO_INCREMENT originais
 não foram copiados. Todas as chaves estrangeiras apontam para Testing. Nenhuma view,
 trigger, registro original ou referência ao banco original foi copiada.
@@ -114,7 +115,7 @@ Campos desconhecidos, inclusive status, são recusados. Status inicial é ABERTO
 
 O sucesso retorna 201, DTO e Location consultável pelo autor, incluindo empresaId
 no Location do ADMIN_GERAL. Edição e cancelamento existem nos dois ambientes, conforme
-a seção específica abaixo. Não há operação de baixas pela API.
+a seção específica abaixo. O módulo de baixas é exclusivo de Testing, conforme a seção final.
 
 Testing recebeu a estrutura auditoria, sem dados originais, e somente SELECT/INSERT
 nessa tabela para gestao_api_testing. Ela registra empresa, entidade lancamentos,
@@ -203,8 +204,8 @@ a contas bancárias e não são modificadas. Nenhuma view original foi copiada.
 A autorização adicional de preparação abrangeu somente as estruturas Testing de
 contas_bancarias, formas_pagamento e baixas, compatíveis com o DDL original e sem
 registros originais. A conta Testing recebeu SELECT/INSERT nessas tabelas para as
-fixtures e UPDATE somente em lancamentos. A aplicação apenas lê baixas, e o interceptor
-recusa sua escrita via EF; as fixtures inserem somente novos registros fictícios.
+fixtures e UPDATE somente em lancamentos. O módulo novo permite inclusão de baixas
+somente dentro da sua transação em Testing; UPDATE/DELETE de baixas continuam proibidos.
 Auditoria permanece append-only. Na implementação original desta etapa, não houve
 alteração em Development. A ativação posterior acrescenta somente as duas permissões
 documentadas abaixo; os nove lançamentos e a auditoria continuam preservados.
@@ -233,8 +234,9 @@ Resultado da implementação inicial: 59 verificações de consultas, 51 de cada
 86 de edição/cancelamento e 66 de login/regressão: 262 aprovadas, zero reprovadas.
 Build --no-restore --nologo: zero erros e zero avisos. O middleware em HTTP local
 continua emitindo o aviso de porta HTTPS não determinada; não é aviso de compilação.
-As fixtures novas são mantidas e acumulam a cada rodada. PARCIAL, estornos e baixas
-pela API permanecem fora do escopo. A ativação técnica de Development está descrita abaixo.
+As fixtures novas são mantidas e acumulam a cada rodada. Edição de PARCIAL e estorno
+de lançamento continuam fora do escopo; o módulo de baixas/estornos existe somente em
+Testing. A ativação técnica dos endpoints anteriores de Development está descrita abaixo.
 
 ## Histórico: preparação de Development sem ativação
 
@@ -350,3 +352,116 @@ inclusive nove lançamentos e uma auditoria, além das fixtures anteriores de Te
 Somente novas fixtures fictícias foram inseridas/alteradas nas rodadas Testing.
 Uma operação futura em Development exige autorização específica sobre registros e
 dados. Estornos e novas regras de saldo continuam fora do escopo.
+
+## Módulo de baixas e estornos em Testing
+
+O DDL real de baixas contém id, lancamento_id, conta_bancaria_id, forma_pagamento_id
+opcional, data_pagamento DATE, valor/juros/multa/desconto DECIMAL(15,2) e observacoes
+VARCHAR(255). Empresa é derivada do lançamento; não existem colunas de criação,
+autoria ou estorno. Autoria e instante de criação são registrados na auditoria.
+As views vw_saldos_lancamentos e vw_fluxo_caixa foram inspecionadas no original e
+permanecem intocadas; não existem em Testing e não foram copiadas. A primeira soma
+encargos em total_baixado, mas calcula o principal pendente com SUM(valor).
+
+O usuário confirmou expressamente o contrato pelo principal: totalBaixado é SUM(valor)
+das baixas sem estorno; saldoRestante é valorOriginal menos esse total. Juros, multa
+e desconto não são aceitos nos novos contratos e são persistidos como zero. Valores
+legados são expostos separadamente, sem alterar os registros. Não há regra nova de
+encargos, saldo bancário ou transferências.
+
+A única alteração estrutural desta entrega foi a tabela complementar abaixo, somente
+em Testing. Nenhuma coluna ou registro existente foi modificado pelo provisionamento:
+
+```sql
+CREATE TABLE `gestao_financeira_seguranca_testes`.`estornos_baixas` (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  baixa_id BIGINT NOT NULL,
+  motivo VARCHAR(500) NOT NULL,
+  criado_em DATETIME(6) NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_estorno_baixa (baixa_id),
+  CONSTRAINT fk_estorno_baixa FOREIGN KEY (baixa_id)
+    REFERENCES `gestao_financeira_seguranca_testes`.`baixas` (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+GRANT SELECT, INSERT
+  ON `gestao_financeira_seguranca_testes`.`estornos_baixas`
+  TO 'gestao_api_testing'@'localhost';
+```
+
+Esse provisionamento é administrativo, separado da API, e recusa sobrescrever a
+estrutura existente. Não é comando de inicialização ou migração automática. Depois
+da preparação, DatabaseSafety exige exatamente a matriz da tabela inicial. Não houve
+novas concessões em Development nem UPDATE/DELETE em baixas, estornos ou auditoria.
+O estorno é append-only; baixa_id único impede duplicidade e a FK é local a Testing.
+
+Os cinco endpoints, exemplos e DTOs estão no README. O módulo inteiro é Testing-only:
+fora desse ambiente o serviço retorna 403 antes de acessar o banco. A autenticação
+continua obrigatória. ADMIN/FINANCEIRO usam a empresa do JWT; ADMIN_GERAL informa
+empresaId explicitamente, no JSON dos POSTs e na query dos GETs. CONSULTA só lê.
+Valida-se a situação atual das identidades e da empresa antes de procurar IDs ou
+calcular totais. Conta precisa ser ativa e da mesma empresa. Formas de pagamento são
+um catálogo global no DDL real, sem vínculo empresarial; o ID informado deve existir.
+
+ABERTO/PARCIAL aceitam baixa até o saldo. QUITADO e CANCELADO não aceitam nova baixa.
+Status/saldo inconsistentes recebem 409, sem reparo silencioso ou saldo negativo.
+Estorno mantém a baixa original e acrescenta motivo e instante UTC, exige identidade
+autorizada, não aceita duplicidade nem lançamento cancelado e recalcula o status.
+Ausência de baixas válidas resulta em ABERTO; saldo positivo em PARCIAL; saldo zero
+em QUITADO. As antigas regras de edição/cancelamento do lançamento não foram relaxadas:
+a existência de qualquer baixa histórica continua bloqueando essas duas operações.
+
+BaixasService usa transação ReadCommitted e bloqueio exclusivo do lançamento antes
+de ler a soma e movimentar o principal. Todos os registros e estornos do mesmo
+lançamento seguem esse protocolo. Leituras compostas usam RepeatableRead para saldo,
+status, contagem e itens consistentes. Não se usa avaliação em memória para filtrar
+empresas: filtros, contagens e paginação são executados no banco antes do DTO.
+
+FinancialWriteGuard permite INSERT de baixa/estorno apenas em Testing, com transação
+ativa e escopo interno do serviço; nunca aceita UPDATE/DELETE desses registros. Nesse
+escopo, só o status do lançamento pode mudar, entre ABERTO/PARCIAL/QUITADO. Não há
+parâmetro HTTP ou configuração que abra o escopo. Os controles anteriores do cadastro,
+edição e cancelamento e os privilégios de Development permanecem preservados.
+
+As auditorias CRIAR_BAIXA e ESTORNAR_BAIXA têm entidade baixas, ID, empresa, autoria
+tipada, UTC e DTOs anterior/posterior; a segunda inclui motivo e ID do estorno no DTO.
+Quando o status muda, ATUALIZAR_STATUS registra os saldos e status anterior/posterior
+com entidade lancamentos. ADMIN_GERAL continua com usuario_id NULL e autorId tipado
+nos detalhes. Falha de auditoria após os efeitos financeiros provoca rollback integral.
+Conflito de bloqueio/duplicidade recebe 409, sem repetição automática; persistência
+falha recebe 500 genérico. Nenhum segredo é registrado na auditoria.
+
+Para testar, prepare o banco/conta Testing conforme a matriz e execute:
+
+```powershell
+dotnet build --no-restore --nologo
+.\scripts\Start-SecurityEnvironment.ps1 -Environment Testing -RunTests
+```
+
+BaixasTestingScenario cria somente novas fixtures fictícias. Cobre parcial/total,
+múltiplas baixas, centavos, saldo/status, RECEITA/DESPESA, catálogo de pagamento,
+conta inativa/estrangeira, validação, quatro perfis, duas empresas, JWT, auditoria,
+rollback após INSERT/estorno/status, concorrência de baixa total e parcial e estorno
+duplicado. A suíte principal cobre também usuário/perfil/empresa/ADMIN_GERAL revogados,
+em todas as novas rotas. Serviços em Development/Production/Staging são testados
+com contexto Testing e recusam a operação antes de emitir SQL. O guard também bloqueia
+entidades novas/alteradas/excluídas fora da transação autorizada.
+
+Limitações: não há idempotência por chave de requisição ou reenvio automático; consulte
+saldo/histórico após resultado inconclusivo. Não há novas operações de baixas em
+Development, encargos novos, baixa/estorno de lançamento cancelado, reparo de legado
+inconsistente, edição de PARCIAL ou estorno de lançamento. Escritores externos futuros
+devem seguir o mesmo bloqueio do lançamento para manter a concorrência segura.
+
+Resultado desta entrega: 448 verificações aprovadas na rodada completa final,
+zero reprovadas (59 consultas, 51 cadastro, 90 edição/cancelamento, 157 baixas e
+91 de login/regressão, incluindo revogações nas novas rotas). O build final passou
+com zero erros e zero avisos. Houve uma compilação inicial bloqueada pela DLL em uso
+pela API anterior; o processo identificado foi encerrado para recompilar. Uma consulta
+inicial também exigiu ajuste de tradução para o provedor MySQL; a suíte foi repetida
+integralmente após a correção. O aviso HTTPS da execução HTTP local permanece.
+
+A comparação final confirmou todos os dados, tabelas, views e privilégios originais
+intactos, incluindo nove lançamentos e uma auditoria, e todas as fixtures Testing
+anteriores preservadas. Development foi reiniciado sem habilitar o novo módulo.
+Nenhum teste de escrita financeira foi executado contra o banco original.
