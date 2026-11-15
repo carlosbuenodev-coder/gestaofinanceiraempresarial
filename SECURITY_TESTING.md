@@ -368,6 +368,7 @@ das baixas sem estorno; saldoRestante é valorOriginal menos esse total. Juros, 
 e desconto não são aceitos nos novos contratos e são persistidos como zero. Valores
 legados são expostos separadamente, sem alterar os registros. Não há regra nova de
 encargos, saldo bancário ou transferências.
+O suporte a juros, multa e desconto em novos registros fica para uma etapa futura.
 
 A única alteração estrutural desta entrega foi a tabela complementar abaixo, somente
 em Testing. Nenhuma coluna ou registro existente foi modificado pelo provisionamento:

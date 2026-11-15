@@ -303,6 +303,7 @@ das baixas não estornadas; saldoRestante = valorOriginal - totalBaixado. Novas 
 têm juros, multa e desconto zero. Os ajustes legados são expostos separadamente no
 DTO; não são somados ao principal nem alterados. As views originais não são usadas
 ou copiadas: sua fórmula de total com encargos não representa este contrato.
+Juros, multa e desconto para novos registros serão implementados em uma etapa futura.
 
 Registro aceita ABERTO/PARCIAL e nunca ultrapassa o saldo. QUITADO/CANCELADO ou
 inconsistência entre principal, baixas e status recebem 409, sem correção automática.
