@@ -362,3 +362,130 @@ vazia. Os exemplos de escrita continuam destinados somente a Testing; esta ativa
 não autoriza registrar ou estornar baixas em Development durante a validação.
 O procedimento de reversão está em SECURITY_TESTING.md; ele preserva os registros
 e a tabela complementar, bloqueando a política e removendo só as concessões novas.
+
+## Consultas de fluxo de caixa (somente leitura)
+
+Todos os endpoints exigem JWT e usuário/empresa ativos. ADMIN, FINANCEIRO e CONSULTA
+consultam somente a própria empresa. ADMIN_GERAL precisa informar `empresaId`
+explicitamente, com cadastro geral ativo; nunca há consulta global implícita.
+O escopo é validado no banco, não apenas pelas claims ou pelo parâmetro recebido.
+
+| GET | Resposta |
+| --- | --- |
+| `/fluxo-caixa/resumo` | Totais previstos e realizados separados, pendências e contagens |
+| `/fluxo-caixa/previsto` | Lista paginada dos principais ainda pendentes, por vencimento |
+| `/fluxo-caixa/realizado` | Lista paginada das baixas efetivas, por pagamento/recebimento |
+| `/fluxo-caixa/por-conta` | Realizado agrupado por conta bancária, paginado por ID |
+| `/fluxo-caixa/por-periodo` | Previsão e realização agrupadas por dia, em colunas separadas |
+| `/fluxo-caixa/dashboard` | Resumo completo e páginas dos agrupamentos diário e por conta |
+
+Parâmetros comuns: `dataInicial` e `dataFinal` obrigatórios (`yyyy-MM-dd`, inclusivos),
+`empresaId`, `categoriaId`, `centroCustoId`, `tipo` (`RECEITA` ou `DESPESA`),
+`pagina` (padrão 1) e `tamanhoPagina` (padrão 20, entre 1 e 100).
+O deslocamento máximo é Int32.MaxValue. Paginação limita listas e agrupamentos;
+o resumo sempre considera todos os registros filtrados. No dashboard, cada agrupamento
+aplica a mesma página/tamanho independentemente. Dias e contas sem movimento não são
+preenchidos artificialmente. A ordem das listas é data, lançamento e baixa, com desempate
+por ID; agrupamentos seguem data ou ID da conta em ordem crescente.
+
+`contaBancariaId` é aceito em `realizado` e `por-conta`. O lançamento não possui conta
+prevista; atribuí-la pela última baixa inventaria uma relação. Por isso, o parâmetro
+é rejeitado com 400 em `previsto`, `resumo`, `por-periodo` e `dashboard`. Use as consultas
+de realizado para filtrar uma conta. Contas inativas continuam consultáveis em seu histórico.
+IDs estrangeiros e inexistentes recebem a mesma validação 400, sem expor sua existência;
+empresa fora do escopo recebe 403. Categoria e tipo incompatíveis recebem 400.
+Datas inválidas, invertidas ou ausentes e paginação inválida recebem 400; JWT ausente,
+inválido ou expirado recebe 401. Usuário ou empresa inativos recebem 403.
+
+O previsto usa `valorOriginal - SUM(baixas.valor sem estorno)` e inclui somente resultados
+positivos de lançamentos não cancelados com vencimento no intervalo. O abatimento usa
+**todo o histórico atual** de baixas válidas, mesmo fora do intervalo solicitado.
+Assim, trata-se da pendência atual organizada por vencimento, não de uma reconstrução
+histórica do saldo na data final. O status QUITADO sozinho não substitui o cálculo.
+Um principal baixado superior ao original interrompe consultas com previsto e retorna 409;
+não há ajuste automático ou ocultação de saldo negativo.
+
+O realizado usa apenas baixas sem estorno, por `data_pagamento` no intervalo, relacionadas
+a lançamento e conta da empresa autorizada. Recebimentos e pagamentos históricos válidos
+continuam realizados mesmo se um lançamento legado tiver status CANCELADO; cancelamento
+exclui somente a previsão e não equivale a estorno. Baixas estornadas são excluídas
+integralmente do realizado e deixam de abater a pendência. Estornos são considerados pelo
+estado atual, sem criar uma movimentação negativa fictícia na data de estorno.
+
+Os totais são de **principal**. Juros, multa e desconto históricos aparecem separadamente
+na lista realizada e não entram no principal, no saldo previsto ou no saldo realizado.
+Não são criadas novas regras de encargos. Uma parcela baixada aparece no realizado e
+somente seu restante aparece no previsto, sem duplicar o valor original.
+
+`saldoPrevisto` e `saldoRealizado` são receitas menos despesas de cada modalidade no
+período. `valoresPendentes` soma receitas e despesas ainda pendentes (valor bruto, não
+líquido). `quantidadeLancamentos` conta IDs distintos com pendência no intervalo ou baixa
+válida no intervalo; `quantidadeBaixasValidas` conta as baixas da parte realizada.
+As datas do resumo registram o filtro aplicado. Todos os valores e contagens respeitam
+categoria, centro de custo e tipo quando informados.
+
+Existe `contas_bancarias.saldo_inicial`, mas não há data de referência nem garantia de
+um histórico bancário completo. `saldoBancarioAcumulado` retorna `null`. O fluxo líquido
+apurado por conta não representa saldo bancário disponível ou acumulado. Nenhuma conta
+ou saldo inicial é criado ou alterado.
+
+Exemplo fictício de consulta:
+
+```http
+GET /fluxo-caixa/resumo?dataInicial=2030-01-01&dataFinal=2030-01-31&empresaId=123
+Authorization: Bearer <JWT>
+```
+
+```json
+{
+  "empresaId": 123,
+  "dataInicial": "2030-01-01",
+  "dataFinal": "2030-01-31",
+  "receitasPrevistas": 680,
+  "despesasPrevistas": 410,
+  "receitasRealizadas": 470,
+  "despesasRealizadas": 150,
+  "saldoPrevisto": 270,
+  "saldoRealizado": 320,
+  "valoresPendentes": 1090,
+  "quantidadeLancamentos": 7,
+  "quantidadeBaixasValidas": 5
+}
+```
+
+Exemplo fictício da lista realizada (página com um registro):
+
+```json
+{
+  "empresaId": 123,
+  "pagina": 1,
+  "tamanhoPagina": 1,
+  "total": 5,
+  "itens": [{
+    "lancamentoId": 10, "baixaId": 20, "contaBancariaId": 30,
+    "tipo": "RECEITA", "descricao": "Fluxo ficticio", "categoriaId": 40,
+    "centroCustoId": 50, "data": "2030-01-05T00:00:00",
+    "principal": 200, "juros": 3, "multa": 2, "desconto": 1
+  }]
+}
+```
+
+No previsto, `baixaId` e `contaBancariaId` são `null`, a data é o vencimento e
+`principal` é o restante. Agrupamentos usam o mesmo envelope de paginação. Por conta,
+cada item contém `contaBancariaId`, `receitasRealizadas`, `despesasRealizadas`,
+`saldoRealizado` e `saldoBancarioAcumulado: null`. Por dia, contém `data` e os seis
+campos monetários de previsão/realização e saldos. O dashboard contém `resumo`,
+`porPeriodo` e `porConta` com esses mesmos contratos.
+
+As views originais foram inspecionadas e preservadas. `vw_fluxo_caixa` inclui encargos
+e não exclui estornos; `vw_saldos_lancamentos` também soma baixas estornadas. Portanto,
+os novos endpoints consultam as tabelas com filtros explícitos, sem depender dessas views
+ou exigir novos privilégios SELECT. Não há migrations, DDL, novos índices ou SaveChanges
+no serviço. Consultas e agregações são assíncronas, filtradas no MySQL, sem rastreamento;
+contagens e páginas compartilham uma transação RepeatableRead.
+
+Para executar a regressão, compile com `dotnet build --no-restore --nologo` e execute
+`./scripts/Start-SecurityEnvironment.ps1 -Environment Testing -RunTests` no PowerShell.
+Credenciais Testing permanecem em DPAPI. A suíte só aceita o banco exclusivo Testing;
+não use dados reais, não execute provisionamento nem amplie permissões. Detalhes e
+resultados da validação estão em SECURITY_TESTING.md.

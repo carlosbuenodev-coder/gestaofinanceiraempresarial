@@ -92,6 +92,8 @@ public static class TestingScenario
             adminA.Id, financeA.Id, geral.Id, tokenA, tokenFinance, tokenConsulta, tokenB, tokenGeral);
         await BaixasTestingScenario.RunAsync(services, db, http, a.Id, b.Id,
             adminA.Id, financeA.Id, geral.Id, tokenA, tokenFinance, tokenConsulta, tokenB, tokenGeral);
+        await FluxoCaixaTestingScenario.RunAsync(db, http, a.Id, b.Id, adminA.Id,
+            tokenA, tokenFinance, tokenConsulta, tokenB, tokenGeral);
         var postBody = new CriarLancamentoRequest("RECEITA", "Cadastro ficticio bloqueado", 1,
             DataEmissao: new DateOnly(2026, 11, 1), DataVencimento: new DateOnly(2026, 11, 30), Valor: 1);
         async Task AlteracoesRevogadas(string token, long? empresa = null)

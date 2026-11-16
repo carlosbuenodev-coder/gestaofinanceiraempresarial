@@ -576,3 +576,102 @@ As limitações anteriores permanecem: sem encargos novos ou chave de idempotên
 sem estorno de lançamento cancelado, sem reparo automático de legado inconsistente.
 A ativação técnica não comprova execução de baixa/estorno real em Development:
 qualquer operação financeira concreta depende de autorização posterior própria.
+
+## Consultas de fluxo de caixa — validação de 16/11/2026
+
+Estado inicial: branch `main`, árvore limpa, HEAD e origin/main em
+`4f59ecc7e5e8c93fc0d053dd24fc20e416c99c8f`. Não havia alterações locais ou commits
+não publicados na referência remota disponível. A atualização da referência remota
+é verificada novamente antes da publicação.
+
+Foram inspecionadas diretamente com SHOW CREATE TABLE/VIEW as estruturas de
+`lancamentos`, `baixas`, `estornos_baixas`, `contas_bancarias`, `categorias`,
+`centros_custo`, `vw_fluxo_caixa` e `vw_saldos_lancamentos`, incluindo seus índices.
+A primeira view combina principal, juros, multa e desconto e não verifica estornos.
+A segunda usa principal para a pendência, mas inclui baixas estornadas nas somas.
+Nenhuma view foi alterada, copiada ou usada como fonte dos novos cálculos.
+
+Índices existentes analisados: `idx_lanc_empresa_venc(empresa_id,data_vencimento,status)`,
+`idx_baixa_data(data_pagamento)`, índices das FKs de categoria, centro, conta e lançamento,
+e `uq_estorno_baixa(baixa_id)`. As consultas filtram no MySQL e usam NOT EXISTS para
+estornos e soma correlacionada para principal pendente. Nenhum índice foi criado;
+não foi executado EXPLAIN de carga ou benchmark, logo não há alegação de desempenho
+medido em grandes volumes.
+
+O serviço novo não chama SaveChanges, não usa DDL nem executa operações financeiras
+de escrita. O mapeamento EF, os serviços anteriores e as permissões permanecem iguais.
+Os seis GETs reutilizam EscopoFinanceiro e a validação JWT existentes, usam DTOs próprios,
+AsNoTracking, agregação SQL e paginação. A leitura dos dados financeiros de cada resposta
+usa uma transação RepeatableRead para manter contagens, páginas e dashboard consistentes.
+
+O saldo previsto considera o principal pendente atual, por vencimento, excluindo
+cancelados. O realizado considera baixas válidas por pagamento, inclusive de um
+cancelado legado com pagamento efetivo. Estorno exclui a baixa de ambas as bases de
+cálculo, independentemente da data do estorno. O intervalo não é uma reconstrução
+histórica: pagamentos válidos anteriores ou posteriores também abatem a pendência atual.
+Juros/multa/desconto são campos separados, sem participar dos totais de principal.
+Principal baixado acima do original gera 409 nas consultas com previsto, sem corrigir
+registros automaticamente. O realizado continua consultável separadamente.
+
+Conta bancária é uma relação da baixa, não do lançamento. `contaBancariaId` é aceito
+somente em realizado/por-conta; as outras quatro rotas rejeitam o parâmetro com 400.
+Histórico de conta inativa permanece consultável. Existe saldo_inicial, mas falta data
+de referência e garantia de histórico completo: saldoBancarioAcumulado retorna null.
+Saldos retornados são fluxos líquidos do período, não saldos bancários acumulados.
+Os contratos, significados, filtros e exemplos JSON estão no README.md.
+
+`Security/FluxoCaixaTestingScenario.cs` foi integrado à suíte existente, com validação
+prévia obrigatória de identidade/privilégios do banco exclusivo Testing. Novas fixtures
+fictícias são criadas somente nesse banco, sem provisionamento estrutural ou cópia de
+dados reais. São cobertos:
+
+- Receitas/despesas previstas e realizadas, múltiplas baixas, parcial, quitação e estorno.
+- Cancelados sem pagamento e histórico legado cancelado com baixa efetiva.
+- Pagamentos antes/depois do intervalo e vencimento fora do intervalo com pagamento dentro.
+- Encargos legados separados, filtros de categoria, centro de custo, tipo e conta.
+- Conta inativa com histórico, totais diários, resumo e consistência do dashboard.
+- ADMIN, FINANCEIRO, CONSULTA e ADMIN_GERAL com escopo explícito nos seis endpoints.
+- Empresa estrangeira, referências estrangeiras/inexistentes e combinações incompatíveis.
+- JWT ausente, inválido e expirado; usuário e empresa inativos nos seis endpoints.
+- Datas inválidas/ausentes/invertidas, limites e overflow de paginação, desempate e página vazia.
+- Preservação de todas as linhas/campos financeiros e auditoria por fingerprint.
+- Principal inconsistente: quatro respostas 409 e fingerprint inalterado.
+
+Procedimento executado:
+
+```powershell
+dotnet build --no-restore --nologo
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Start-SecurityEnvironment.ps1 -Environment Testing -RunTests
+```
+
+ExecutionPolicy foi liberada apenas para o processo de execução do script local revisado;
+a política persistente do Windows não foi alterada. Credenciais são carregadas por DPAPI
+em memória e não são exibidas ou persistidas em logs. Nenhum comando de provisionamento
+foi executado. Os logs locais são ignorados pelo Git.
+
+Resultado da rodada completa final: **662 verificações aprovadas, zero reprovadas**:
+59 consultas anteriores, 51 cadastro, 90 alteração/cancelamento, 159 baixas/estornos,
+91 autenticação/administração anteriores (86 respostas HTTP e cinco logins), mais
+212 verificações do fluxo de caixa. A execução terminou com SECURITY_SCENARIO_COMPLETE.
+Uma rodada inicial revelou falha de tradução da ordenação de uma projeção pelo EF/MySQL;
+a projeção foi corrigida e a suíte completa foi repetida com sucesso.
+Build solicitado aprovado: zero avisos e zero erros.
+
+Em Development foram executadas **51 verificações**, exclusivamente GET nos seis novos
+endpoints e SELECT para validar seus totais independentemente. Cobertura: JWT autorizado,
+inválido/ausente/expirado, ADMIN_GERAL sem empresa, paginação inválida, referência inexistente
+e intervalo invertido. Foi usado JWT temporário gerado em memória com identidade geral
+ativa existente; não houve login POST, novos usuários ou mudanças de permissões.
+Não houve INSERT, UPDATE, DELETE, DDL, migrations ou gravação de auditoria em Development.
+
+Hashes locais de todas as tabelas e seus registros, definições de tabelas/views e metadados
+de privilégios foram capturados antes dos testes GET e comparados depois. Resultado:
+DEVELOPMENT_UNCHANGED, preservação integral. Ferramentas administrativas de inspeção,
+comparação e smoke GET são locais, dependem do cofre DPAPI e estão ignoradas pelo Git.
+A API iniciada para a verificação é encerrada após a validação.
+
+Limitações: não há saldo bancário acumulado, previsão por conta, extrato histórico na
+posição de uma data passada ou geração de dias sem movimentos. Os agrupamentos do
+dashboard são paginados; para obter todos, percorra suas páginas. Nenhuma ampliação de
+privilégios SELECT foi necessária. Caso falte privilégio em outro ambiente, a implantação
+deve informar a necessidade, sem concedê-lo automaticamente.

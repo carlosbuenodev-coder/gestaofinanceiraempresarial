@@ -76,3 +76,8 @@ __pycache__/
 
 /scripts/inspect_post_local.py
 /scripts/provision_post_local.py
+
+# Ferramentas locais de inspeção do fluxo de caixa (dependem do cofre DPAPI local)
+/scripts/inspect_cashflow.py
+/scripts/verify_cashflow_preservation.py
+/scripts/check_cashflow_development.py
