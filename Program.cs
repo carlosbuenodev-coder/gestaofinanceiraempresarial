@@ -105,6 +105,13 @@ builder.Services.AddAuthorizationBuilder()
         politica.RequireAuthenticatedUser()
                 .RequireRole("ADMIN"));
 
+// Local browser access only. Other environments keep their existing CORS behavior.
+if (builder.Environment.IsDevelopment())
+    builder.Services.AddCors(options => options.AddPolicy("FrontendLocal", policy =>
+        policy.WithOrigins("http://localhost:5173")
+            .WithMethods("GET", "POST")
+            .WithHeaders("Content-Type", "Authorization")));
+
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
@@ -130,6 +137,9 @@ if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
+
+if (app.Environment.IsDevelopment())
+    app.UseCors("FrontendLocal");
 
 app.UseHttpsRedirection();
 app.UseAuthentication();

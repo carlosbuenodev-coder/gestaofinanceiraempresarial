@@ -81,3 +81,14 @@ __pycache__/
 /scripts/inspect_cashflow.py
 /scripts/verify_cashflow_preservation.py
 /scripts/check_cashflow_development.py
+
+# Frontend: dependencies, build output and local tooling state
+/frontend/node_modules/
+/frontend/dist/
+/frontend/coverage/
+/frontend/.vite/
+/frontend/*.tsbuildinfo
+# Only the documented public example may be tracked; local .env files stay ignored.
+!/frontend/.env.example
+
+/frontend/.qa/

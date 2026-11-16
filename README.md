@@ -489,3 +489,196 @@ Para executar a regressão, compile com `dotnet build --no-restore --nologo` e e
 Credenciais Testing permanecem em DPAPI. A suíte só aceita o banco exclusivo Testing;
 não use dados reais, não execute provisionamento nem amplie permissões. Detalhes e
 resultados da validação estão em SECURITY_TESTING.md.
+
+## Frontend React + TypeScript
+
+A interface inicial fica em `frontend/`, com React 19.3.1, TypeScript 7.0.2,
+Vite 8.3.8 e React Router 7.18.5. As versões exatas e dependências transitivas
+estão em `frontend/package.json` e `frontend/package-lock.json`.
+Pré-requisito: Node.js 24 ou superior com npm. Ambiente validado: Node.js
+24.21.0 e npm 11.19.0. No Windows, use `npm.cmd` se a política do PowerShell
+impedir a execução de `npm.ps1`, sem precisar mudar a política do sistema.
+
+```text
+frontend/
+  .env.example           Exemplo público de configuração
+  index.html             Documento em português brasileiro
+  src/
+    components/          Marca própria, ícones, alertas e layout responsivo
+    contexts/            Estado da autenticação e ciclo de sessão em memória
+    hooks/               useAuth
+    pages/               Login, início autenticado e páginas de estado
+    routes/              React Router e proteção da área autenticada
+    services/            Cliente HTTP e tratamento de respostas
+    styles/              Estilos responsivos e foco de teclado
+    test/                Testes de interface com respostas simuladas
+    types/               Contratos e validação da resposta da API
+```
+
+Instalação e execução, a partir da raiz do repositório:
+
+```powershell
+cd frontend
+npm.cmd install
+Copy-Item .env.example .env.local
+npm.cmd run dev
+```
+
+O frontend fica em `http://localhost:5173/login`. A porta é fixa (`strictPort`):
+se estiver ocupada, encerre o processo que a utiliza. Não há troca silenciosa de
+porta porque a origem precisa corresponder ao CORS autorizado. O Vite escuta
+somente em localhost. Para instalação reproduzível após clonar, pode-se usar
+`npm.cmd ci` com o lockfile publicado.
+
+O arquivo `.env.local` pode conter:
+
+```dotenv
+VITE_API_BASE_URL=http://localhost:5216
+```
+
+Essa é também a URL padrão. Reinicie o Vite após editar a configuração. Variáveis
+`VITE_` são públicas e incorporadas ao build; nunca coloque senhas, chaves JWT ou
+credenciais nelas. Todos os `.env` locais continuam ignorados; apenas
+`frontend/.env.example`, sem segredos, é publicado. `node_modules`, `dist`, logs,
+cobertura e artefatos locais de QA também ficam fora do Git.
+
+Para iniciar a API em outro terminal, na raiz do repositório:
+
+```powershell
+dotnet build --no-restore --nologo
+dotnet run --no-build --launch-profile http
+```
+
+A API utiliza a configuração local existente em User Secrets e as verificações
+atuais de ambiente/privilégios. Não execute provisionamento, migrations ou
+`--criar-admin-geral` para usar o frontend. API HTTP local: `http://localhost:5216`.
+O perfil HTTPS existente usa 7272; para este frontend local, use o perfil `http`
+para manter a origem de desenvolvimento documentada. Se o PowerShell restringir
+scripts, os comandos acima não exigem liberar execução de arquivos `.ps1`.
+
+O único ajuste HTTP no backend é CORS, somente em Development:
+origem exata `http://localhost:5173`, métodos GET/POST e cabeçalhos Content-Type e
+Authorization. Não há wildcard nem cookies cross-origin. `127.0.0.1:5173`, outra
+porta e origens externas não são autorizados. Outros ambientes mantêm o
+comportamento anterior e precisam de configuração própria antes de uma implantação
+externa. O CORS não substitui JWT, perfis ou isolamento empresarial.
+O `.csproj` exclui `frontend/**` dos itens .NET para evitar copiar dependências,
+artefatos ou `.env` para a saída do backend. O frontend é compilado separadamente.
+Nenhum endpoint ou contrato financeiro foi modificado.
+
+### Login e sessão
+
+O formulário solicita código da empresa, e-mail e senha. O código é informado
+manualmente pelo usuário autorizado, sem consultar ou listar empresas de terceiros.
+IDs precisam ser inteiros positivos representáveis com precisão em JavaScript;
+valores acima de Number.MAX_SAFE_INTEGER são rejeitados, nunca arredondados.
+
+Contrato real enviado, sem campos adicionais:
+
+```http
+POST /auth/usuarios/login
+Content-Type: application/json
+```
+
+```json
+{ "empresaId": 7, "email": "usuario@empresa.invalid", "senha": "<informada-localmente>" }
+```
+
+A API retorna `token`, `tipo` (`Bearer`), `expiraEmUtc` e `usuario`, que contém
+`id`, `empresaId`, `nome`, `email`, `perfil` e `ativo`. Antes de liberar `/app`,
+o frontend confirma a identidade com:
+
+```http
+GET /usuarios/me
+Authorization: Bearer <token-em-memoria>
+```
+
+A identidade exibida vem dessa confirmação. Os IDs do usuário e da empresa são
+conferidos contra o login; contratos inválidos ou identidade de outra empresa
+impedem a liberação. O formulário permanece bloqueado durante a verificação.
+Nenhum token aparece em URLs, logs, localStorage ou sessionStorage. Senhas ficam
+somente no estado temporário do formulário e não são persistidas. A opção mostrar
+senha é explícita; a senha não é alterada por trim. E-mail é enviado sem espaços
+externos. Dados de empresa/e-mail são preservados após falhas; senha é limpa quando
+há recusa de credenciais ou acesso, ou após sucesso, e preservada em falhas de rede
+recuperáveis enquanto o formulário estiver aberto.
+
+O logout descarta o token, limpa a identidade e impede respostas tardias de
+restaurarem uma sessão encerrada. Ao recarregar a página, é necessário novo login.
+A sessão expira pelo horário informado pela API; 401 em consulta protegida remove
+o acesso e solicita novo login. 403 remove a sessão e leva à página não autorizada.
+Não há refresh token nem endpoint fictício de logout. Como o JWT é stateless,
+o logout local não revoga cópias externas de um token: sua validade no servidor
+continua seguindo as regras já existentes do backend.
+
+O botão **Verificar acesso**, o retorno à janela e a reativação da aba consultam
+`/usuarios/me` novamente. Falhas nessa confirmação removem dados protegidos e
+solicitam nova autenticação. Há timeout de 15 segundos para solicitações. Erros de
+rede, indisponibilidade, HTTP 500 e respostas inesperadas recebem mensagens amigáveis;
+corpos técnicos e stack traces da API nunca são apresentados ao usuário.
+
+Este login atende ADMIN, FINANCEIRO e CONSULTA. ADMIN_GERAL continua preservado
+em `/auth/admin/login`, mas não possui tela nesta etapa: `/usuarios/me` exige a
+política empresarial UsuarioEmpresa e não aceita essa identidade geral. Não foi
+criado um contrato alternativo nem alterada a segurança para contornar a separação.
+A interface não permite troca de empresa, e o backend continua responsável pela
+autorização de cada solicitação.
+
+### Rotas e escopo atual
+
+- `/login`: formulário empresarial; usuários autenticados seguem para `/app`.
+- `/app`: início protegido, identificação do usuário, empresa por ID e perfil.
+- `/nao-autorizado`: explicação de acesso restrito.
+- `/nao-encontrado`: página para caminhos desconhecidos.
+
+A raiz encaminha para a área protegida. O layout inclui cabeçalho, menu lateral,
+logout e menu móvel com foco de teclado, Escape e fundo modal. O nome empresarial
+não é inventado: como `/usuarios/me` fornece somente `empresaId`, a tela mostra
+`Empresa #ID`. Dashboard, lançamentos, contas a pagar/receber, baixas, fluxo de caixa,
+relatórios e configurações aparecem desabilitados e identificados como em
+desenvolvimento. Nenhum valor financeiro fictício é exibido. A ilustração e os
+ícones são locais, sem bibliotecas de UI, fontes externas ou logotipos de terceiros.
+
+### Validação do frontend
+
+Na pasta `frontend`:
+
+```powershell
+npm.cmd run typecheck
+npm.cmd run build
+npm.cmd test
+```
+
+`build` verifica TypeScript e gera `frontend/dist`. `test` usa Vitest, jsdom e
+Testing Library com mocks de fetch; não usa usuários reais nem acessa MySQL.
+Não foi adicionado ESLint: `typecheck` é a verificação estática disponível,
+e `test:watch` permite desenvolvimento dos testes. Dependências de execução são
+somente React, React DOM e React Router; as demais são de compilação ou testes.
+Para visualizar o build, `npm.cmd run preview` usa `http://localhost:4173`.
+Essa origem não está autorizada no CORS local: use `npm.cmd run dev` em 5173 para
+validar login com a API, sem ampliar origens automaticamente.
+
+Validação desta entrega em 16/11/2026:
+
+- Instalação concluída; auditoria npm inicial sem vulnerabilidades reportadas.
+- Builds React/TypeScript/Vite e .NET aprovados; backend sem avisos ou erros.
+- 33 testes automatizados aprovados: renderização, campos, login, confirmação de
+  identidade, erros, isolamento de empresa, expiração, rotas, logout, recarga,
+  resposta tardia, módulos futuros e menu móvel.
+- Nove verificações em Edge real com autenticação simulada, incluindo desktop
+  1440×1000, móvel 390×844, ausência de overflow, menu e logout.
+- Sete verificações reais de CORS, somente OPTIONS e GET `/usuarios/me` sem token:
+  origem permitida, métodos/cabeçalhos limitados, origens recusadas e HTTP 401.
+- Nenhum login real foi executado e nenhuma credencial foi solicitada pelo chat.
+  A validação com um usuário real permanece como teste manual local, exclusivamente
+  com credenciais fornecidas pelo usuário no próprio formulário.
+- Nenhuma operação financeira ou escrita, DDL ou mudança de privilégios MySQL foi
+  executada. A inicialização da API apenas realizou suas verificações existentes.
+  A suíte financeira anterior não foi executada nesta etapa, pois cria operações
+  financeiras fictícias; os novos testes são de interface e autenticação com mocks.
+
+Para uma implantação futura, configure a URL HTTPS real da API no build e o
+servidor estático para responder com `index.html` nas rotas da SPA (inclusive acesso
+direto a `/app`). Publicação em hospedagem externa não faz parte desta etapa.
+Próximas funcionalidades: telas financeiras integradas aos contratos já existentes,
+dashboard real e, mediante escopo específico, acesso administrativo geral.

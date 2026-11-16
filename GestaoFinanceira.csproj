@@ -7,6 +7,14 @@
     <UserSecretsId>bc12ff6f-58aa-4486-9679-b79fda3cc561</UserSecretsId>
   </PropertyGroup>
 
+  <!-- The Vite application is built separately; never include node_modules or local env in .NET output. -->
+  <ItemGroup>
+    <Compile Remove="frontend\**" />
+    <Content Remove="frontend\**" />
+    <None Remove="frontend\**" />
+    <EmbeddedResource Remove="frontend\**" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.12" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.14" />
