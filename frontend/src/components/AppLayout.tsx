@@ -1,4 +1,4 @@
-﻿import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '../hooks/useAuth'
 import { Brand } from './Brand'
@@ -7,12 +7,13 @@ import type { IconName } from './Icon'
 import { perfis } from '../types/auth'
 
 const future: { name: string; icon: IconName }[] = [
-  { name: 'Dashboard', icon: 'chart' }, { name: 'Lançamentos', icon: 'entries' },
+  { name: 'Lançamentos', icon: 'entries' },
   { name: 'Contas a pagar', icon: 'out' }, { name: 'Contas a receber', icon: 'in' },
   { name: 'Baixas', icon: 'payments' }, { name: 'Fluxo de caixa', icon: 'flow' },
   { name: 'Relatórios', icon: 'report' }, { name: 'Configurações', icon: 'settings' },
 ]
 export function AppLayout() {
+  const location = useLocation()
   const { usuario, logout } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
   const toggle = useRef<HTMLButtonElement>(null)
@@ -44,12 +45,12 @@ export function AppLayout() {
       <div className="sidebar-company"><span className="company-icon"><Icon name="company" /></span><span><small>EMPRESA ATIVA</small><strong>Empresa #{usuario.empresaId}</strong></span></div>
       <nav><p className="nav-label">ÁREA DE TRABALHO</p>
         <NavLink to="/app" end className="nav-item" onClick={() => setMenuOpen(false)}><Icon name="home" />Início</NavLink>
-        <p className="nav-label future-label">GESTÃO FINANCEIRA <span>EM DESENVOLVIMENTO</span></p>
+        <NavLink to="/app/dashboard" className="nav-item" onClick={() => setMenuOpen(false)}><Icon name="chart" />Dashboard</NavLink><p className="nav-label future-label">GESTÃO FINANCEIRA <span>EM DESENVOLVIMENTO</span></p>
         {future.map(item => <button key={item.name} className="nav-item nav-future" disabled title="Em desenvolvimento"><Icon name={item.icon} /><span>{item.name}</span><span className="nav-dot" aria-hidden="true" /></button>)}
       </nav>
       <div className="sidebar-bottom"><span className="avatar">{initials}</span><span className="sidebar-user"><strong>{usuario.nome}</strong><small>{perfis[usuario.perfil]}</small></span><button className="icon-button" title="Sair da conta" aria-label="Sair da conta" onClick={logout}><Icon name="logout" /></button></div>
     </aside>
-    <div className="app-body"><header className="app-header"><div className="header-location"><button ref={toggle} className="icon-button mobile-menu-toggle" aria-label="Abrir menu" aria-expanded={menuOpen} aria-controls="navegacao" onClick={() => setMenuOpen(true)}><Icon name="menu" /></button><span>Área de trabalho</span><span className="breadcrumb-slash">/</span><strong>Início</strong></div><div className="header-account"><span className="header-company"><Icon name="company" /> Empresa #{usuario.empresaId}</span><span className="avatar avatar-small">{initials}</span></div></header>
+    <div className="app-body"><header className="app-header"><div className="header-location"><button ref={toggle} className="icon-button mobile-menu-toggle" aria-label="Abrir menu" aria-expanded={menuOpen} aria-controls="navegacao" onClick={() => setMenuOpen(true)}><Icon name="menu" /></button><span>Área de trabalho</span><span className="breadcrumb-slash">/</span><strong>{location.pathname === '/app/dashboard' ? 'Dashboard' : 'Início'}</strong></div><div className="header-account"><span className="header-company"><Icon name="company" /> Empresa #{usuario.empresaId}</span><span className="avatar avatar-small">{initials}</span></div></header>
       <main id="conteudo" className="app-content" tabIndex={-1}><Outlet /></main>
       <footer className="app-footer"><span>Gestão Financeira Empresarial</span><span>Ambiente da empresa #{usuario.empresaId}</span></footer>
     </div>

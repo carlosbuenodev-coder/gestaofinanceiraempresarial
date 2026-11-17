@@ -9,7 +9,7 @@ export const unexpected = () => new ApiError('unexpected', 'Não foi possível c
 
 const baseUrl = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5216').replace(/\/+$/, '')
 
-async function request(path: string, options: { body?: Credenciais; token?: string; signal?: AbortSignal } = {}): Promise<unknown> {
+export async function request(path: string, options: { body?: Credenciais; token?: string; signal?: AbortSignal } = {}): Promise<unknown> {
   const controller = new AbortController()
   const cancel = () => controller.abort()
   options.signal?.addEventListener('abort', cancel, { once: true })

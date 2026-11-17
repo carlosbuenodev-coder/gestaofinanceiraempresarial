@@ -11,5 +11,6 @@ export interface AuthContextValue extends AuthState {
   login: (credentials: Credenciais) => Promise<void>
   logout: () => void
   refreshSession: () => Promise<void>
+  authorizedRequest: (path: string, signal?: AbortSignal) => Promise<unknown>
 }
 export const AuthContext = createContext<AuthContextValue | null>(null)

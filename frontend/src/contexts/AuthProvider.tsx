@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { authApi, ApiError, unexpected } from '../services/api'
+import { authApi, ApiError, unexpected, request } from '../services/api'
 import type { Credenciais, Usuario } from '../types/auth'
 import { AuthContext } from './auth-context'
 import type { AuthState } from './auth-context'
@@ -69,6 +69,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clear({ code: failure.code, message: failure.message })
     }
   }, [clear])
+  const authorizedRequest = useCallback(async (path: string, signal?: AbortSignal) => {
+    const current = session.current
+    const attempt = generation.current
+    if (!current || current.expiresAt <= Date.now()) {
+      const failure = new ApiError('expired', 'Sua sessão expirou. Entre novamente para continuar.')
+      clear({ code: failure.code, message: failure.message })
+      throw failure
+    }
+    try {
+      const result = await request(path, { token: current.token, signal })
+      if (attempt !== generation.current || !mounted.current) throw new ApiError('cancelled', 'Solicitação cancelada.')
+      return result
+    } catch (error) {
+      if (attempt === generation.current && error instanceof ApiError && (error.code === 'expired' || error.code === 'forbidden'))
+        clear({ code: error.code, message: error.message })
+      throw error
+    }
+  }, [clear])
   useEffect(() => {
     mounted.current = true
     return () => { mounted.current = false; generation.current++; pending.current?.abort(); session.current = null }
@@ -86,5 +104,5 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       document.removeEventListener('visibilitychange', onVisibility)
     }
   }, [state.status, clear, refreshSession])
-  return <AuthContext.Provider value={{ ...state, login, logout, refreshSession }}>{children}</AuthContext.Provider>
+  return <AuthContext.Provider value={{ ...state, login, logout, refreshSession, authorizedRequest }}>{children}</AuthContext.Provider>
 }

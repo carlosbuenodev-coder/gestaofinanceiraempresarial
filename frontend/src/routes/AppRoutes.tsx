@@ -1,8 +1,9 @@
-﻿import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
+import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { AppLayout } from '../components/AppLayout'
 import { LoginPage } from '../pages/LoginPage'
 import { HomePage } from '../pages/HomePage'
+import { DashboardPage } from '../pages/DashboardPage'
 import { StatusPage } from '../pages/StatusPage'
 
 function ProtectedRoute() {
@@ -15,7 +16,7 @@ export function AppRoutes() {
   return <Routes>
     <Route path="/" element={<Navigate to="/app" replace />} />
     <Route path="/login" element={<LoginPage />} />
-    <Route element={<ProtectedRoute />}><Route path="/app" element={<AppLayout />}><Route index element={<HomePage />} /></Route></Route>
+    <Route element={<ProtectedRoute />}><Route path="/app" element={<AppLayout />}><Route index element={<HomePage />} /><Route path="dashboard" element={<DashboardPage />} /></Route></Route>
     <Route path="/nao-autorizado" element={<StatusPage forbidden />} />
     <Route path="/nao-encontrado" element={<StatusPage />} />
     <Route path="*" element={<Navigate to="/nao-encontrado" replace />} />

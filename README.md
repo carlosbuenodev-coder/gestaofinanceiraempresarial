@@ -634,7 +634,7 @@ autorização de cada solicitação.
 A raiz encaminha para a área protegida. O layout inclui cabeçalho, menu lateral,
 logout e menu móvel com foco de teclado, Escape e fundo modal. O nome empresarial
 não é inventado: como `/usuarios/me` fornece somente `empresaId`, a tela mostra
-`Empresa #ID`. Dashboard, lançamentos, contas a pagar/receber, baixas, fluxo de caixa,
+`Empresa #ID`. O dashboard está disponível; lançamentos, contas a pagar/receber, baixas, fluxo de caixa,
 relatórios e configurações aparecem desabilitados e identificados como em
 desenvolvimento. Nenhum valor financeiro fictício é exibido. A ilustração e os
 ícones são locais, sem bibliotecas de UI, fontes externas ou logotipos de terceiros.
@@ -681,4 +681,120 @@ Para uma implantação futura, configure a URL HTTPS real da API no build e o
 servidor estático para responder com `index.html` nas rotas da SPA (inclusive acesso
 direto a `/app`). Publicação em hospedagem externa não faz parte desta etapa.
 Próximas funcionalidades: telas financeiras integradas aos contratos já existentes,
-dashboard real e, mediante escopo específico, acesso administrativo geral.
+e, mediante escopo específico, acesso administrativo geral.
+
+## Dashboard financeiro React — etapa 2
+
+A rota protegida `/app/dashboard` está disponível no menu, preservando `/app`,
+login, logout e as demais rotas. Exibe sete indicadores oficiais: receitas e
+despesas previstas/realizadas, resultados previsto/realizado e valores pendentes.
+A aplicação não contém dados financeiros demonstrativos nem fallback financeiro.
+Falhas removem os valores da consulta e oferecem nova tentativa; zero só aparece
+quando devolvido por uma consulta válida. Há estados de carregamento e sem dados.
+
+### Organização e endpoints
+
+- `src/pages/DashboardPage.tsx`: consulta, filtros, indicadores e detalhes paginados.
+- `src/components/FinanceChart.tsx`: `MetricCard` e `FinanceChart`, reutilizáveis.
+  Gráficos SVG locais, legendas e tabelas de valores acessíveis por teclado;
+  nenhuma nova dependência. Barras negativas ficam à esquerda do eixo.
+- `src/services/cashflow.ts`: serviço autenticado para os seis GETs existentes.
+- `src/types/cashflow.ts`: DTOs e validação de respostas desconhecidas em runtime.
+- `src/utils/format.ts`: BRL, datas civis locais e períodos predefinidos.
+- `src/utils/charts.ts`: agrupamento mensal exclusivamente para visualização.
+- `src/test/dashboard.test.tsx`: testes com fetch e autenticação simulados.
+
+| GET | Uso |
+|---|---|
+| `/fluxo-caixa/dashboard` | Consulta inicial e atualização: resumo, períodos e contas em uma resposta. |
+| `/fluxo-caixa/por-periodo` | Completa os períodos além da primeira página. |
+| `/fluxo-caixa/por-conta` | Completa as contas além da primeira página. |
+| `/fluxo-caixa/previsto` | Detalhes de pendências por vencimento, sob demanda. |
+| `/fluxo-caixa/realizado` | Detalhes de baixas por pagamento, sob demanda. |
+| `/fluxo-caixa/resumo` | Método `resumo()` tipado e validado no serviço, coberto por teste; não chamado redundantemente pela página, pois `/dashboard` já devolve o mesmo resumo. |
+
+As consultas usam `dataInicial`, `dataFinal`, `pagina` e `tamanhoPagina=100`.
+Gráficos e contas completam as páginas sequencialmente antes de apresentar dados;
+as movimentações têm navegação Anterior/Próxima. Totais não são calculados a partir
+de uma página de movimentos. Respostas de outra empresa, intervalos incompatíveis,
+campos inesperados ou totais de paginação inconsistentes resultam em erro amigável.
+Não há polling nem consulta ao digitar: datas só são enviadas em Aplicar filtros.
+Requisições obsoletas são canceladas e suas respostas não atualizam a página.
+
+### Apresentação, filtros e segurança
+
+- Filtros: mês atual, mês anterior, últimos 90 dias incluindo hoje, ano atual e
+  personalizado. Mês/ano usam o intervalo completo, incluindo vencimentos futuros.
+  Datas obrigatórias e em ordem crescente; sem conversão UTC que desloque o dia.
+- BRL em `pt-BR`; datas apresentadas como `dd/MM/aaaa`.
+- Previsto é o principal ainda pendente dos lançamentos não cancelados, segundo a
+  API; realizado é o principal das baixas válidas por data de pagamento. Os totais
+  oficiais não incluem juros, multas ou descontos. Não significam saldo bancário.
+- Gráficos: receitas/despesas previstas versus realizadas; entradas/saídas por
+  data; evolução mensal dos resultados. A evolução agrupa os resultados diários
+  oficiais, sem recalcular critérios financeiros. Somente meses presentes são
+  mostrados, sem inventar séries ou preencher lacunas; meses limítrofes podem ser
+  parciais conforme o filtro. Indicadores vêm diretamente do resumo do backend.
+- Layout adaptável a desktop, notebook, tablet e celular. Gráficos/tabelas largos
+  têm rolagem interna; tabelas alternativas permitem consultar os valores exatos.
+- JWT continua somente em memória no `AuthProvider`. `authorizedRequest` reutiliza
+  o HTTP existente, com Bearer, timeout e cancelamento; 401 encerra a sessão e 403
+  encaminha a acesso negado. Logout/expiração retiram os dados protegidos.
+- A empresa vem de `/usuarios/me`; não há seletor nem parâmetro `empresaId` nas
+  consultas da página. ADMIN_GERAL continua fora do contrato de login empresarial;
+  uma futura seleção exige fluxo explícito autorizado e validado pelo backend.
+  Nenhuma regra de autorização do backend foi alterada.
+
+### Execução e testes
+
+Com Node compatível com `frontend/package.json`, na pasta `frontend`:
+
+```powershell
+npm.cmd ci
+npm.cmd run dev
+npm.cmd run build
+npm.cmd run typecheck
+npm.cmd test
+```
+
+O frontend usa `http://localhost:5173`; a URL pública da API pode ser configurada
+em `VITE_API_BASE_URL`, conforme o exemplo existente. Use a configuração local
+segura já estabelecida para executar a API; esta etapa não exige login real nem
+inicialização do backend para executar testes. Build do backend na raiz:
+
+```powershell
+dotnet build --no-restore --nologo
+```
+
+Não há script de lint no projeto. Os testes usam Vitest/jsdom e Testing Library,
+sem senhas reais, rede externa ou operações MySQL. Em máquinas com poucos recursos,
+`npm.cmd test -- --maxWorkers=1` executa os arquivos sequencialmente. A suíte anterior
+foi preservada; apenas o teste de módulos futuros passou de oito para sete, pois
+Dashboard agora é um link funcional.
+
+### Limitações e próximos passos
+
+As páginas adicionais são leituras HTTP separadas: a API garante snapshot por
+requisição, não um snapshot compartilhado entre páginas. Mudanças de total são
+recusadas; alterações simultâneas que preservem a contagem ainda podem afetar a
+consistência temporal. Atualize a consulta após alterações financeiras. Intervalos
+muito extensos geram mais páginas e podem demorar. Não há saldo bancário acumulado
+fornecido para exibição nem seleção administrativa geral de empresa nesta etapa.
+
+Próximos passos: implementar as telas de lançamentos/baixas e avaliar uma consulta
+agregada mensal e paginação com snapshot estável no backend, em escopo autorizado.
+A validação real com credenciais próprias permanece manual e opcional; os testes
+nunca dependem dela. Nenhuma API de escrita, operação financeira, migração, alteração
+de dados, estrutura ou privilégios MySQL foi executada nesta entrega.
+
+Validação final da etapa 2 em 16/11/2026:
+
+- 55 testes aprovados (33 anteriores e 22 do dashboard), sem reprovações na
+  execução final sequencial. A execução concorrente apresentou dois timeouts nos
+  testes anteriores durante a validação visual; a repetição sequencial passou.
+- `npm.cmd run build`: TypeScript e Vite aprovados.
+- `dotnet build --no-restore --nologo`: aprovado, zero avisos e zero erros.
+- Edge real com mocks: 16 verificações aprovadas em 1440×1000, 1024×768,
+  768×1024 e 390×844, incluindo sete indicadores, três gráficos, ausência de
+  overflow da página, JWT não persistido, erro sem valores, nova tentativa e logout.
+- Nenhum login real, acesso ao banco ou alteração do backend foi necessário.
