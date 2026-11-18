@@ -20,8 +20,9 @@ jobs:
       - uses: actions/setup-dotnet@v6.1.0
         with:
           dotnet-version: '10.0.x'
-      - run: dotnet restore ./GestaoFinanceira.csproj
+      - run: dotnet restore ./tests/GestaoFinanceira.Tests/GestaoFinanceira.Tests.csproj
       - run: dotnet build ./GestaoFinanceira.csproj --configuration Release --no-restore
+      - run: dotnet test ./tests/GestaoFinanceira.Tests/GestaoFinanceira.Tests.csproj --configuration Release --no-restore
 
   frontend:
     runs-on: ubuntu-latest
