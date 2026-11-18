@@ -36,10 +36,16 @@ public static class CadastroFinanceiroMapping
             e.ToTable("formas_pagamento"); e.HasKey(x => x.Id); e.Property(x => x.Id).HasColumnName("id");
         });
         Referencia<CategoriaFinanceira>(model, "categorias");
+        model.Entity<CategoriaFinanceira>().Property(x => x.Nome).HasColumnName("nome").HasMaxLength(100);
         model.Entity<CategoriaFinanceira>().Property(x => x.Tipo).HasColumnName("tipo").HasColumnType("enum('RECEITA','DESPESA')");
         Referencia<ClienteFinanceiro>(model, "clientes");
+        model.Entity<ClienteFinanceiro>().Property(x => x.Nome).HasColumnName("nome").HasMaxLength(180);
+        model.Entity<ClienteFinanceiro>().Property(x => x.Ativo).HasColumnName("ativo").HasColumnType("tinyint(1)");
         Referencia<FornecedorFinanceiro>(model, "fornecedores");
+        model.Entity<FornecedorFinanceiro>().Property(x => x.Nome).HasColumnName("nome").HasMaxLength(180);
+        model.Entity<FornecedorFinanceiro>().Property(x => x.Ativo).HasColumnName("ativo").HasColumnType("tinyint(1)");
         Referencia<CentroCustoFinanceiro>(model, "centros_custo");
+        model.Entity<CentroCustoFinanceiro>().Property(x => x.Nome).HasColumnName("nome").HasMaxLength(100);
         var e = model.Entity<Auditoria>();
         e.ToTable("auditoria");
         e.HasKey(x => x.Id);

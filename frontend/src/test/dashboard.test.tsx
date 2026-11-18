@@ -93,12 +93,20 @@ describe('Dashboard protegido e integrado', () => {
     expect(screen.queryByText('Conta #5')).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Receitas previstas' })).toBeNull()
   })
-  it.each([401, 403])('retira o dashboard quando a API responde %s', async status => {
+  it('encerra a sessão quando o dashboard recebe HTTP 401', async () => {
     const original = fetch
-    vi.stubGlobal('fetch', vi.fn((input, options) => String(input).includes('/dashboard?') ? Promise.resolve(json({}, status)) : original(input, options)))
+    vi.stubGlobal('fetch', vi.fn((input, options) => String(input).includes('/dashboard?') ? Promise.resolve(json({}, 401)) : original(input, options)))
     renderApp(); await login()
-    await waitFor(() => expect(screen.getByRole('heading', { name: status === 401 ? 'Acesse sua conta' : 'Não foi possível liberar o acesso.' })).toBeTruthy())
+    expect(await screen.findByRole('heading', { name: 'Acesse sua conta' })).toBeTruthy()
     expect(screen.queryByRole('heading', { name: 'Receitas previstas' })).toBeNull()
+  })
+  it('informa a falta de permissão e mantém a sessão quando o dashboard recebe HTTP 403', async () => {
+    const original = fetch
+    vi.stubGlobal('fetch', vi.fn((input, options) => String(input).includes('/dashboard?') ? Promise.resolve(json({}, 403)) : original(input, options)))
+    renderApp(); await login()
+    expect((await screen.findByRole('alert')).textContent).toContain('Você não tem permissão para esta operação.')
+    expect(screen.queryByRole('heading', { name: 'Receitas previstas' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Sair da conta' })).toBeTruthy()
   })
   it('aplica datas somente ao enviar e atualiza indicadores pelos novos resultados oficiais', async () => {
     renderApp(); await login(); await screen.findByText('Conta #5')

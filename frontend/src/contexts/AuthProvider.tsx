@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { authApi, ApiError, unexpected, request } from '../services/api'
+import type { MutationOptions } from '../services/api'
 import type { Credenciais, Usuario } from '../types/auth'
 import { AuthContext } from './auth-context'
 import type { AuthState } from './auth-context'
@@ -69,7 +70,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clear({ code: failure.code, message: failure.message })
     }
   }, [clear])
-  const authorizedRequest = useCallback(async (path: string, signal?: AbortSignal) => {
+  const authorizedRequest = useCallback(async (path: string, signal?: AbortSignal, options: MutationOptions = {}) => {
     const current = session.current
     const attempt = generation.current
     if (!current || current.expiresAt <= Date.now()) {
@@ -78,11 +79,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw failure
     }
     try {
-      const result = await request(path, { token: current.token, signal })
+      const result = await request(path, { ...options, token: current.token, signal })
       if (attempt !== generation.current || !mounted.current) throw new ApiError('cancelled', 'Solicitação cancelada.')
       return result
     } catch (error) {
-      if (attempt === generation.current && error instanceof ApiError && (error.code === 'expired' || error.code === 'forbidden'))
+      if (attempt === generation.current && error instanceof ApiError && error.code === 'expired')
         clear({ code: error.code, message: error.message })
       throw error
     }

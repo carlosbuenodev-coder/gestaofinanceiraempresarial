@@ -212,12 +212,13 @@ describe('Rotas e ciclo de sessão', () => {
     expect(screen.queryByText(usuario.email)).toBeNull()
     expect(fetch).toHaveBeenCalledTimes(2)
   })
-  it('mantém os sete módulos futuros desabilitados e libera o dashboard', async () => {
+  it('mantém os três módulos futuros desabilitados e libera o fluxo de caixa', async () => {
     success(); renderApp(); await fillAndSubmit()
     await screen.findByRole('heading', { name: 'Olá, Ana.' })
     const buttons = screen.getAllByTitle('Em desenvolvimento')
-    expect(buttons.length).toBe(7)
+    expect(buttons.length).toBe(3)
     expect(buttons.every(b => b.hasAttribute('disabled'))).toBe(true)
+    expect(screen.getByRole('link', { name: 'Fluxo de caixa' }).getAttribute('href')).toBe('/app/fluxo-caixa')
   })
   it('abre o menu móvel e fecha com Escape devolvendo foco', async () => {
     success(); renderApp(); await fillAndSubmit()

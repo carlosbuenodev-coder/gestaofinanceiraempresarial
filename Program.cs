@@ -147,6 +147,7 @@ app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapLancamentos();
+app.MapCadastrosFinanceiros();
 app.MapBaixas();
 app.MapFluxoCaixa();
 

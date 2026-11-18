@@ -9,22 +9,28 @@ public sealed class CategoriaFinanceira : IReferenciaFinanceira
 {
     public long Id { get; set; }
     public long EmpresaId { get; set; }
+    public string Nome { get; set; } = "";
     public string Tipo { get; set; } = "";
 }
 public sealed class ClienteFinanceiro : IReferenciaFinanceira
 {
     public long Id { get; set; }
     public long EmpresaId { get; set; }
+    public string Nome { get; set; } = "";
+    public bool? Ativo { get; set; }
 }
 public sealed class FornecedorFinanceiro : IReferenciaFinanceira
 {
     public long Id { get; set; }
     public long EmpresaId { get; set; }
+    public string Nome { get; set; } = "";
+    public bool? Ativo { get; set; }
 }
 public sealed class CentroCustoFinanceiro : IReferenciaFinanceira
 {
     public long Id { get; set; }
     public long EmpresaId { get; set; }
+    public string Nome { get; set; } = "";
 }
 public sealed class Auditoria
 {

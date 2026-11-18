@@ -1762,3 +1762,22 @@ svg {
 .empty-state { padding:24px; text-align:center; background:#edf2f8; color:#586d84; border-radius:8px; margin:12px 0 }
 @media(max-width:1100px) { .metrics-grid { grid-template-columns:repeat(2,minmax(0,1fr)) } }
 @media(max-width:600px) { .finance-panel { padding:18px }.finance-filters { flex-direction:column; align-items:stretch }.finance-filters label { min-width:0 }.metrics-grid { gap:10px }.metric-card { padding:14px }.metric-card strong { font-size:17px } }
+
+/* Operational entry screens */
+.entry-fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:18px; margin:18px 0 }
+.entry-fields label { display:flex; flex-direction:column; gap:8px; font-size:12px; font-weight:600; min-width:0 }
+.entry-fields input,.entry-fields select,.entry-fields textarea { width:100%; min-height:44px; padding:10px; border:1px solid #d7dfe9; border-radius:6px; font:inherit; color:var(--navy); background:white }
+.entry-fields textarea { min-height:100px; resize:vertical }
+.entry-fields [aria-invalid=true] { border-color:#a93646 }
+.entry-fields input:disabled,.entry-fields select:disabled { background:#f1f5fa }
+.entry-wide { grid-column:1/-1 }.entry-form fieldset { border:0; padding:0; margin:20px 0 }.entry-form legend { font-weight:600; font-size:15px }
+.entry-details,.entry-balance { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:20px; margin:18px 0 }
+.entry-details dt,.entry-balance dt { color:#586d84; font-size:11px; margin-bottom:8px }.entry-details dd,.entry-balance dd { margin:0; font-size:14px; overflow-wrap:anywhere; font-variant-numeric:tabular-nums }
+.entry-balance { font-weight:400; min-width:290px }.entry-balance dd { font-size:12px }.entry-observations { white-space:pre-wrap }
+.entry-table th:first-child { max-width:280px; min-width:170px; white-space:normal; overflow-wrap:anywhere }.entry-table td { vertical-align:top }
+.entry-status { padding:5px 9px; border-radius:5px; font-size:11px; background:#edf2f8; color:#344c6a }.status-parcial { background:#fff2d6; color:#72511b }.status-quitado { background:#e4f4ed; color:#176a51 }.status-cancelado { background:#f6e9ed; color:#91374b }
+.entry-success { background:#e4f4ed; color:#176a51; padding:16px; border:1px solid #b4daca; border-radius:8px; margin-bottom:20px }
+.button-danger { color:#fff; background:#a93646 }.button-danger:disabled { opacity:.6 }.cancel-confirmation { border:1px solid #e7bdc3; background:#fff8f9; padding:18px; border-radius:7px }
+.entry-form select:focus-visible,.entry-filters select:focus-visible,.entry-form textarea:focus-visible { outline:3px solid #90b8f1; outline-offset:3px }
+@media(max-width:1100px) { .entry-fields,.entry-details { grid-template-columns:repeat(2,minmax(0,1fr)) } }
+@media(max-width:600px) { .entry-fields,.entry-details { grid-template-columns:1fr }.entry-fields input,.entry-fields select,.entry-fields textarea { font-size:16px }.entry-balance { grid-template-columns:1fr; min-width:0 }.entry-table .entry-balance { min-width:140px } }

@@ -3,8 +3,11 @@ import { isDashboard, isResumo, isPagina, isPeriodo, isConta, isMovimento } from
 import type { Pagina, Periodo, Conta, Movimento, Dashboard } from '../types/cashflow'
 import type { DateRange } from '../utils/format'
 export type AuthorizedRequest = (path: string, signal?: AbortSignal) => Promise<unknown>
-export function cashflowApi(request: AuthorizedRequest, empresaId: number, range: DateRange, signal?: AbortSignal) {
-  const query = new URLSearchParams({ ...range, tamanhoPagina: '100' })
+export interface CashflowFilters extends DateRange { tipo?: 'RECEITA' | 'DESPESA' }
+
+export function cashflowApi(request: AuthorizedRequest, empresaId: number, range: CashflowFilters, signal?: AbortSignal) {
+  const query = new URLSearchParams({ dataInicial: range.dataInicial, dataFinal: range.dataFinal, tamanhoPagina: '100' })
+  if (range.tipo) query.set('tipo', range.tipo)
   const get = (endpoint: string, pagina = 1) => request(`/fluxo-caixa/${endpoint}?${query}&pagina=${pagina}`, signal)
   const scope = (empresa: number) => { if (empresa !== empresaId) throw unexpected() }
   async function page<T>(endpoint: string, guard: (v: unknown) => v is T, pagina = 1): Promise<Pagina<T>> {
@@ -46,5 +49,9 @@ export function cashflowApi(request: AuthorizedRequest, empresaId: number, range
     movimentos: (tipo: 'previsto' | 'realizado', pagina = 1) => page<Movimento>(tipo, isMovimento, pagina),
     periodos: (pagina = 1) => page<Periodo>('por-periodo', isPeriodo, pagina),
     contas: (pagina = 1) => page<Conta>('por-conta', isConta, pagina),
+    async realizadoPorConta(): Promise<Conta[]> {
+      const first = await page('por-conta', isConta)
+      return (await complete('por-conta', first, isConta)).itens
+    },
   }
 }
