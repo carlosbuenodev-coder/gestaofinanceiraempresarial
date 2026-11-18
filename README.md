@@ -1,7 +1,11 @@
 # Sistema de Gestão Financeira Empresarial
 
-API REST em C#/.NET 10, ASP.NET Core, Entity Framework Core e MySQL, com
-controle de acesso por perfil e empresa. O projeto está em desenvolvimento.
+Sistema de gestão financeira com API REST em C#/.NET 10, ASP.NET Core, Entity
+Framework Core e MySQL, e interface em React, TypeScript e Vite.
+Este repositório registra a evolução do projeto de portfólio em desenvolvimento.
+As validações usam ambientes locais provisionados. O clone depende de
+provisionamento externo de MySQL e credenciais, e a publicação do código não
+prevê hospedagem pública.
 
 ## Funcionalidades implementadas
 
@@ -14,15 +18,28 @@ controle de acesso por perfil e empresa. O projeto está em desenvolvimento.
 - Isolamento por empresa do JWT e verificação do acesso atual do ADMIN no banco.
 - Development e Testing com contas MySQL, conexões e JWTs separados.
 - Baixas parciais/totais, saldo e estorno rastreável em Development e Testing.
+- Login empresarial com sessão em memória e confirmação da identidade por
+  `GET /usuarios/me`.
+- Dashboard financeiro e consultas de lançamentos, contas a pagar e contas a receber.
+- Cadastro, consulta, edição e cancelamento lógico de lançamentos na interface.
+  Edição e cancelamento exigem lançamento aberto e sem baixas, inclusive estornadas.
+  Cadastro, edição e cancelamento persistem a auditoria na mesma transação da operação.
+- Seletores de categoria, cliente, fornecedor e centro de custo, carregados de
+  `GET /cadastros-financeiros` no escopo da empresa autenticada. O formulário mostra
+  nomes, restringe categorias ao tipo de lançamento e envia os IDs selecionados.
+- Tela de Fluxo de Caixa por datas e tipo de movimentação, com receitas, despesas
+  e líquidos previstos e realizados fornecidos pela API. Se o resumo retorna
+  HTTP 409, a tela consulta o realizado por conta com os mesmos filtros e indica
+  que o previsto e o consolidado do período estão indisponíveis.
 
 ## Perfis e permissões atuais
 
 | Perfil | Permissões |
 |---|---|
-| ADMIN_GERAL | Administra empresas e usuários empresariais. Consulta e cadastra lançamentos de empresas ativas com empresaId explícito, respeitando o escopo empresarial. Sua identidade é armazenada separadamente. |
-| ADMIN | Consulta e cadastra lançamentos na própria empresa. Consulta usuários dessa empresa e cria e administra FINANCEIRO e CONSULTA. Não altera nem desativa ADMIN, inclusive a si mesmo. |
-| FINANCEIRO | Consulta e cadastra lançamentos na própria empresa. Consulta o próprio cadastro; não administra usuários. |
-| CONSULTA | Somente consulta lançamentos da própria empresa; não pode cadastrar lançamentos. Consulta o próprio cadastro; não administra usuários. |
+| ADMIN_GERAL | Administra empresas e usuários empresariais. Opera nas rotas financeiras da API com empresa explícita conforme o contrato. Sua identidade é armazenada separadamente. |
+| ADMIN | Consulta e opera lançamentos na própria empresa, conforme as regras de cada mutação. Consulta usuários dessa empresa e cria e administra FINANCEIRO e CONSULTA. A alteração e a desativação de contas ADMIN são reservadas ao ADMIN_GERAL. |
+| FINANCEIRO | Consulta e opera lançamentos na própria empresa, conforme as regras de cada mutação. Consulta o próprio cadastro. |
+| CONSULTA | Consulta o próprio cadastro e os dados financeiros da própria empresa. |
 
 O cadastro financeiro está habilitado em Development e Testing, com contas, bancos
 e chaves JWT separados. O serviço e o interceptor validam a conexão correspondente
@@ -32,6 +49,13 @@ de administração de empresas e usuários
 permanecem preservadas. ADMIN_GERAL informa empresaId na query dos GETs e no corpo JSON
 do POST; usuários empresariais usam a empresa do JWT e não podem informar empresaId no POST.
 ADMIN_GERAL não utiliza os endpoints exclusivos de usuários empresariais.
+
+A API verifica o estado atual de usuários, perfis e empresas nas rotas financeiras.
+A interface empresarial usa a empresa da sessão, e a API recusa consultas
+financeiras com escopo explícito de outra empresa. Nas rotas administrativas de
+empresas e usuários, a política também consulta se o ADMIN_GERAL continua ativo.
+Após a desativação, novas requisições com um JWT ainda válido emitido anteriormente
+recebem 403, inclusive nas rotas compartilhadas de detalhe, edição e desativação de usuários.
 
 Nos endpoints PUT e PATCH de usuários, ADMIN recebe 404 para IDs inexistentes e
 usuários de outras empresas. ADMIN da própria empresa permanece protegido com
@@ -50,6 +74,12 @@ usuários de outras empresas. ADMIN da própria empresa permanece protegido com
 | PATCH | `/usuarios/{id}/desativar` | Desativação lógica conforme autorização. |
 | GET / POST | `/empresas` | Listagem ou cadastro pelo ADMIN_GERAL. |
 | GET / PUT | `/empresas/{id}` | Consulta ou atualização pelo ADMIN_GERAL. |
+| GET | `/cadastros-financeiros` | Catálogos de categorias, clientes, fornecedores e centros de custo da empresa autenticada. |
+| GET / POST | `/lancamentos` | Consulta paginada e cadastro financeiro. |
+| GET / PUT | `/lancamentos/{id}` | Detalhe e edição de lançamento. |
+| GET | `/lancamentos/{id}/saldo` | Valor original, principal baixado e saldo restante. |
+| POST | `/lancamentos/{id}/cancelamento` | Cancelamento lógico com auditoria. |
+| GET | `/fluxo-caixa/resumo` e `/fluxo-caixa/por-conta` | Resumo oficial e realizado por conta, inclusive para a apresentação parcial. |
 
 ## Ambientes e execução
 
@@ -96,7 +126,13 @@ O inicializador não cria bancos, tabelas ou contas e não executa migrações.
 
 ## Validações realizadas
 
-O cenário HTTP em Security/TestingScenario.cs foi executado em banco exclusivo
+| Modalidade | Evidência registrada |
+|---|---|
+| Testes automatizados do frontend | **123 de 123 testes aprovados** com respostas de `fetch` simuladas. Incluem sessão, permissões, Dashboard, operações de lançamentos, seletores e Fluxo de Caixa completo e parcial. Essa suíte não acessa MySQL. |
+| Regressões HTTP em Testing | Validação do login, do isolamento entre empresas, da leitura dos catálogos e do CRUD financeiro com auditoria em dados fictícios. A regressão focada de revogação confirmou 403 nas oito operações administrativas com o mesmo JWT emitido antes da desativação. Ela foi executada separadamente da suíte ampla com fixtures. |
+| Validação real no Edge | Navegação e fluxo de cadastro, edição e cancelamento auditado em Testing, antes da introdução dos seletores. Também foram validados o Fluxo de Caixa completo e parcial, os filtros e a comparação tela/API. A validação parcial no Edge incluiu automação para simular falha e atrasar uma resposta, sem alterar a API. O envio dos IDs dos seletores está coberto por mocks. |
+
+Em rodadas históricas, o cenário HTTP em Security/TestingScenario.cs foi executado em banco exclusivo
 com empresas e usuários fictícios. Foram confirmados login dos quatro perfis,
 consultas autorizadas, PUT/PATCH entre empresas e em ID inexistente com 404,
 proteção de ADMIN com 403 e ausência de autenticação com 401.
@@ -118,9 +154,10 @@ antes de usar `-RunTests`.
 - Security/: validação das conexões e cenário HTTP isolado.
 - scripts/Start-SecurityEnvironment.ps1: inicializador sem credenciais embutidas.
 
-Próximos passos: ampliar a cobertura automatizada; desenvolver clientes,
-fornecedores, contas bancarias, escrita financeira e fluxo de caixa; e preparar configuracao
-específica para implantação. A configuração atual destina-se aos ambientes locais descritos.
+Pendências da interface: telas de baixas e estornos, relatórios, configurações,
+administração de empresas e usuários e manutenção dos cadastros auxiliares.
+Baixas e estornos já têm endpoints. Consulte [as operações do frontend](frontend/OPERACOES.md)
+para os fluxos disponíveis e suas limitações.
 
 ## Autor
 
@@ -605,8 +642,11 @@ recuperáveis enquanto o formulário estiver aberto.
 
 O logout descarta o token, limpa a identidade e impede respostas tardias de
 restaurarem uma sessão encerrada. Ao recarregar a página, é necessário novo login.
-A sessão expira pelo horário informado pela API; 401 em consulta protegida remove
-o acesso e solicita novo login. 403 remove a sessão e leva à página não autorizada.
+A sessão expira pelo horário informado pela API. Um 401 em operação protegida
+encerra a sessão e solicita novo login. Um 403 de operação informa falta de permissão
+na tela atual e mantém a sessão. Um 403 de `/usuarios/me` durante o login impede
+a abertura da sessão. Durante uma revalidação, encerra a sessão e encaminha à
+página de acesso negado.
 Não há refresh token nem endpoint fictício de logout. Como o JWT é stateless,
 o logout local não revoga cópias externas de um token: sua validade no servidor
 continua seguindo as regras já existentes do backend.
@@ -628,15 +668,18 @@ autorização de cada solicitação.
 
 - `/login`: formulário empresarial; usuários autenticados seguem para `/app`.
 - `/app`: início protegido, identificação do usuário, empresa por ID e perfil.
+- `/app/dashboard`: indicadores, gráficos e movimentações financeiras do período.
+- `/app/lancamentos`: lista, detalhe, saldo e acesso a cadastro, edição e cancelamento conforme o perfil.
+- `/app/contas-a-pagar` e `/app/contas-a-receber`: consultas filtradas por despesa e receita.
+- `/app/fluxo-caixa`: resumo por datas e tipo, com resultado parcial por conta quando o previsto estiver indisponível.
 - `/nao-autorizado`: explicação de acesso restrito.
 - `/nao-encontrado`: página para caminhos desconhecidos.
 
 A raiz encaminha para a área protegida. O layout inclui cabeçalho, menu lateral,
 logout e menu móvel com foco de teclado, Escape e fundo modal. O nome empresarial
 não é inventado: como `/usuarios/me` fornece somente `empresaId`, a tela mostra
-`Empresa #ID`. O dashboard está disponível; lançamentos, contas a pagar/receber, baixas, fluxo de caixa,
-relatórios e configurações aparecem desabilitados e identificados como em
-desenvolvimento. Nenhum valor financeiro fictício é exibido. A ilustração e os
+`Empresa #ID`. Baixas, relatórios e configurações aparecem no menu como módulos em
+desenvolvimento. Os valores financeiros exibidos vêm da API. A ilustração e os
 ícones são locais, sem bibliotecas de UI, fontes externas ou logotipos de terceiros.
 
 ### Validação do frontend
@@ -781,11 +824,10 @@ consistência temporal. Atualize a consulta após alterações financeiras. Inte
 muito extensos geram mais páginas e podem demorar. Não há saldo bancário acumulado
 fornecido para exibição nem seleção administrativa geral de empresa nesta etapa.
 
-Próximos passos: implementar as telas de lançamentos/baixas e avaliar uma consulta
+Próximos passos: implementar as telas de baixas e estornos e avaliar uma consulta
 agregada mensal e paginação com snapshot estável no backend, em escopo autorizado.
-A validação real com credenciais próprias permanece manual e opcional; os testes
-nunca dependem dela. Nenhuma API de escrita, operação financeira, migração, alteração
-de dados, estrutura ou privilégios MySQL foi executada nesta entrega.
+Os testes frontend usam mocks e rodam independentemente das validações reais.
+Na etapa histórica do Dashboard, a validação dessa tela usou operações de leitura.
 
 Validação final da etapa 2 em 16/11/2026:
 
