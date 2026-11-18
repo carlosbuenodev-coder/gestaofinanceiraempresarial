@@ -5,6 +5,7 @@ using GestaoFinanceira.Data;
 using GestaoFinanceira.Models;
 using GestaoFinanceira.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -94,10 +95,11 @@ builder.Services
         };
     });
 
+builder.Services.AddScoped<IAuthorizationHandler, AdministradorGeralAtivoHandler>();
 builder.Services.AddAuthorizationBuilder()
-    .AddPolicy("SomenteAdminGeral", politica =>
+    .AddPolicy(AdministradorGeralAtivo.Politica, politica =>
         politica.RequireAuthenticatedUser()
-                .RequireRole("ADMIN_GERAL"))
+                .AddRequirements(new AdministradorGeralAtivo()))
     .AddPolicy("UsuarioEmpresa", politica =>
         politica.RequireAuthenticatedUser()
                 .RequireRole("ADMIN", "FINANCEIRO", "CONSULTA"))
@@ -430,7 +432,7 @@ app.MapGet("/empresas", async (
     return Results.Ok(empresas);
 })
 .WithName("ListarEmpresas")
-.RequireAuthorization("SomenteAdminGeral");
+.RequireAuthorization(AdministradorGeralAtivo.Politica);
 
 // GET - Buscar empresa pelo ID
 app.MapGet("/empresas/{id:long}", async (
@@ -452,7 +454,7 @@ app.MapGet("/empresas/{id:long}", async (
     return Results.Ok(empresa);
 })
 .WithName("BuscarEmpresaPorId")
-.RequireAuthorization("SomenteAdminGeral");
+.RequireAuthorization(AdministradorGeralAtivo.Politica);
 
 // POST - Cadastrar empresa
 app.MapPost("/empresas", async (
@@ -514,7 +516,7 @@ app.MapPost("/empresas", async (
         empresa);
 })
 .WithName("CadastrarEmpresa")
-.RequireAuthorization("SomenteAdminGeral");
+.RequireAuthorization(AdministradorGeralAtivo.Politica);
 
 // PUT - Atualizar empresa existente
 app.MapPut("/empresas/{id:long}", async (
@@ -594,7 +596,7 @@ app.MapPut("/empresas/{id:long}", async (
     return Results.Ok(empresa);
 })
 .WithName("AtualizarEmpresa")
-.RequireAuthorization("SomenteAdminGeral");
+.RequireAuthorization(AdministradorGeralAtivo.Politica);
 
 // POST - Cadastrar usuário de uma empresa (somente administrador geral)
 app.MapPost("/usuarios", async (
@@ -673,7 +675,7 @@ app.MapPost("/usuarios", async (
     return Results.Created($"/usuarios/{usuario.Id}", resposta);
 })
 .WithName("CadastrarUsuario")
-.RequireAuthorization("SomenteAdminGeral");
+.RequireAuthorization(AdministradorGeralAtivo.Politica);
 
 
 // CRUD de usuários: o administrador geral administra todas as empresas;
@@ -681,35 +683,16 @@ app.MapPost("/usuarios", async (
 app.MapGet("/usuarios/{id:long}", async (
     long id,
     ClaimsPrincipal principal,
-    GestaoFinanceiraContext contexto) =>
+    GestaoFinanceiraContext contexto,
+    IAuthorizationService autorizacao,
+    HttpContext http) =>
 {
-    // Administrador geral pode consultar usuários de qualquer empresa.
-    if (principal.IsInRole("ADMIN_GERAL") &&
-        principal.FindFirstValue("tipo_usuario") != "EMPRESA")
-    {
-        var usuarioGeral = await contexto.Usuarios
-            .AsNoTracking()
-            .FirstOrDefaultAsync(u => u.Id == id);
+    var (usuariosPermitidos, _) = await UsuariosNoEscopoAdministrativo(principal, contexto, autorizacao, http);
+    if (usuariosPermitidos is null) return Results.Forbid();
 
-        return usuarioGeral is null
-            ? Results.NotFound()
-            : Results.Ok(RespostaUsuario(usuarioGeral));
-    }
-
-    // Somente ADMIN ativo pode consultar usuários da própria empresa.
-    if (!await AdminEmpresaAtual(principal, contexto))
-        return Results.Forbid();
-
-    if (!long.TryParse(
-        principal.FindFirstValue("empresa_id"),
-        out var empresaId))
-        return Results.Forbid();
-
-    var usuario = await contexto.Usuarios
+    var usuario = await usuariosPermitidos
         .AsNoTracking()
-        .FirstOrDefaultAsync(u =>
-            u.Id == id &&
-            u.EmpresaId == empresaId);
+        .FirstOrDefaultAsync(u => u.Id == id);
 
     return usuario is null
         ? Results.NotFound()
@@ -746,17 +729,17 @@ app.MapPost("/usuarios/minha-empresa", async (CriarUsuarioEmpresaRequest request
 }).RequireAuthorization("AdminEmpresa");
 
 app.MapPut("/usuarios/{id:long}", async (long id, AtualizarUsuarioRequest request,
-    ClaimsPrincipal principal, GestaoFinanceiraContext contexto) =>
+    ClaimsPrincipal principal, GestaoFinanceiraContext contexto,
+    IAuthorizationService autorizacao, HttpContext http) =>
 {
-    var usuariosPermitidos = await UsuariosNoEscopoAdministrativo(principal, contexto);
+    var (usuariosPermitidos, geral) = await UsuariosNoEscopoAdministrativo(principal, contexto, autorizacao, http);
     if (usuariosPermitidos is null) return Results.Forbid();
 
     var usuario = await usuariosPermitidos.FirstOrDefaultAsync(u => u.Id == id);
     if (usuario is null) return Results.NotFound();
-    if (!await PodeAdministrarUsuario(principal, contexto, usuario.EmpresaId, usuario.Perfil))
+    if (!geral && !await PodeAdministrarUsuarioEmpresa(principal, contexto, usuario.EmpresaId, usuario.Perfil))
         return Results.Forbid();
 
-    var geral = principal.IsInRole("ADMIN_GERAL");
     var perfil = request.Perfil?.Trim().ToUpperInvariant();
     var nome = request.Nome?.Trim();
     var email = request.Email?.Trim();
@@ -782,14 +765,15 @@ app.MapPut("/usuarios/{id:long}", async (long id, AtualizarUsuarioRequest reques
 
 // Desativação lógica: não exclui registros nem compromete referências financeiras.
 app.MapPatch("/usuarios/{id:long}/desativar", async (long id,
-    ClaimsPrincipal principal, GestaoFinanceiraContext contexto) =>
+    ClaimsPrincipal principal, GestaoFinanceiraContext contexto,
+    IAuthorizationService autorizacao, HttpContext http) =>
 {
-    var usuariosPermitidos = await UsuariosNoEscopoAdministrativo(principal, contexto);
+    var (usuariosPermitidos, geral) = await UsuariosNoEscopoAdministrativo(principal, contexto, autorizacao, http);
     if (usuariosPermitidos is null) return Results.Forbid();
 
     var usuario = await usuariosPermitidos.FirstOrDefaultAsync(u => u.Id == id);
     if (usuario is null) return Results.NotFound();
-    if (!await PodeAdministrarUsuario(principal, contexto, usuario.EmpresaId, usuario.Perfil))
+    if (!geral && !await PodeAdministrarUsuarioEmpresa(principal, contexto, usuario.EmpresaId, usuario.Perfil))
         return Results.Forbid();
     usuario.Ativo = false;
     await contexto.SaveChangesAsync();
@@ -856,36 +840,32 @@ static async Task<bool> AdminEmpresaAtual(ClaimsPrincipal principal,
         await contexto.Empresas.AsNoTracking().AnyAsync(e => e.Id == empresaId && e.Ativo);
 }
 
-static async Task<IQueryable<Usuario>?> UsuariosNoEscopoAdministrativo(
+static async Task<(IQueryable<Usuario>? Usuarios, bool Geral)> UsuariosNoEscopoAdministrativo(
     ClaimsPrincipal principal,
-    GestaoFinanceiraContext contexto)
+    GestaoFinanceiraContext contexto, IAuthorizationService autorizacao, HttpContext http)
 {
-    if (principal.IsInRole("ADMIN_GERAL") &&
-        principal.FindFirstValue("tipo_usuario") != "EMPRESA")
+    if (principal.IsInRole("ADMIN_GERAL"))
     {
-        return contexto.Usuarios;
+        var acesso = await autorizacao.AuthorizeAsync(principal, http, AdministradorGeralAtivo.Politica);
+        return acesso.Succeeded ? (contexto.Usuarios, true) : (null, false);
     }
 
     if (!await AdminEmpresaAtual(principal, contexto))
-        return null;
+        return (null, false);
 
     if (!long.TryParse(
         principal.FindFirstValue("empresa_id"),
         out var empresaId))
     {
-        return null;
+        return (null, false);
     }
 
-    return contexto.Usuarios
-        .Where(u => u.EmpresaId == empresaId);
+    return (contexto.Usuarios.Where(u => u.EmpresaId == empresaId), false);
 }
 
-static async Task<bool> PodeAdministrarUsuario(ClaimsPrincipal principal,
+static async Task<bool> PodeAdministrarUsuarioEmpresa(ClaimsPrincipal principal,
     GestaoFinanceiraContext contexto, long empresaId, string perfilAlvo)
 {
-    if (principal.IsInRole("ADMIN_GERAL") &&
-        principal.FindFirstValue("tipo_usuario") != "EMPRESA")
-        return true;
     if (perfilAlvo == "ADMIN" ||
         !long.TryParse(principal.FindFirstValue("empresa_id"), out var empresaToken) ||
         empresaToken != empresaId)

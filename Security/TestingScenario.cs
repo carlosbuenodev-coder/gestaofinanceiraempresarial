@@ -119,9 +119,29 @@ public static class TestingScenario
 
         await Expect(HttpMethod.Get, "/empresas", tokenGeral, null, 200);
         await Expect(HttpMethod.Get, $"/empresas/{a.Id}", tokenGeral, null, 200);
-        await Expect(HttpMethod.Get, "/empresas", tokenA, null, 403);
         await Expect(HttpMethod.Get, "/empresas", null, null, 401);
         await Expect(HttpMethod.Get, $"/usuarios/{financeA.Id}", tokenA, null, 200);
+        await Expect(HttpMethod.Get, $"/usuarios/{financeB.Id}", tokenGeral, null, 200);
+        // An active general administrator reaches body validation on these write routes.
+        await Expect(HttpMethod.Post, "/empresas", tokenGeral, new { razaoSocial = "" }, 400);
+        await Expect(HttpMethod.Put, $"/empresas/{a.Id}", tokenGeral, new { razaoSocial = "" }, 400);
+        await Expect(HttpMethod.Post, "/usuarios", tokenGeral, new { empresaId = 0 }, 400);
+
+        var empresasEUsuariosGerais = new (HttpMethod Metodo, string Rota, object? Corpo)[]
+        {
+            (HttpMethod.Get, "/empresas", null),
+            (HttpMethod.Get, $"/empresas/{b.Id}", null),
+            (HttpMethod.Post, "/empresas", new { razaoSocial = "Empresa fictícia somente para teste de revogação", ativo = true }),
+            (HttpMethod.Put, $"/empresas/{b.Id}", new { razaoSocial = "Alteração fictícia bloqueada", ativo = true }),
+            (HttpMethod.Post, "/usuarios", new { empresaId = b.Id, nome = "Usuário fictício bloqueado",
+                email = "revogacao-" + execution + "@seguranca.invalid", perfil = "CONSULTA", senha = password })
+        };
+        var antesAdminEmpresa = await Fingerprint(db);
+        foreach (var (metodo, rota, corpo) in empresasEUsuariosGerais)
+            await Expect(metodo, rota, tokenA, corpo, 403);
+        if (antesAdminEmpresa != await Fingerprint(db))
+            throw new InvalidOperationException("ADMIN de empresa alterou registros por rota geral.");
+
         object Body(Usuario u) => new { nome = "Ficticio Atualizado", email = u.Email, perfil = "CONSULTA" };
         const long missing = long.MaxValue;
         if (await db.Usuarios.AnyAsync(u => u.Id == missing)) throw new InvalidOperationException("ID não está ausente.");
@@ -188,6 +208,14 @@ public static class TestingScenario
         Console.WriteLine("[OK] Operações permitidas persistidas somente em fixtures; bloqueios após desativação/rebaixamento confirmados.");
         geral.Ativo = false;
         await db.SaveChangesAsync();
+        var aposRevogacao = await Fingerprint(db);
+        foreach (var (metodo, rota, corpo) in empresasEUsuariosGerais)
+            await Expect(metodo, rota, tokenGeral, corpo, 403);
+        await Expect(HttpMethod.Get, $"/usuarios/{financeB.Id}", tokenGeral, null, 403);
+        await Expect(HttpMethod.Put, $"/usuarios/{financeB.Id}", tokenGeral, Body(financeB), 403);
+        await Expect(HttpMethod.Patch, $"/usuarios/{financeB.Id}/desativar", tokenGeral, null, 403);
+        if (aposRevogacao != await Fingerprint(db))
+            throw new InvalidOperationException("JWT de ADMIN_GERAL revogado alterou registros administrativos.");
         await Expect(HttpMethod.Get, $"/lancamentos?empresaId={a.Id}", tokenGeral, null, 403);
         await Expect(HttpMethod.Get, $"/lancamentos/{long.MaxValue}?empresaId={a.Id}", tokenGeral, null, 403);
         await Expect(HttpMethod.Post, "/lancamentos", tokenGeral, postBody with { EmpresaId = a.Id }, 403);

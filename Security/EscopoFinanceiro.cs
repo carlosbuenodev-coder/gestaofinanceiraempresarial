@@ -16,8 +16,7 @@ public static class EscopoFinanceiro
         long empresa;
         if (perfil == "ADMIN_GERAL")
         {
-            if (principal.HasClaim(c => c.Type == "empresa_id" || c.Type == "tipo_usuario") ||
-                !await db.AdministradoresGerais.AsNoTracking().AnyAsync(a => a.Id == id && a.Ativo, ct))
+            if (!await AdministradorGeralAtivo.VerificarAsync(principal, db, ct))
                 return (0, Results.Forbid());
             if (empresaSolicitada is null)
                 return (0, Results.BadRequest(new { mensagem = "ADMIN_GERAL exige empresaId explícito." }));
