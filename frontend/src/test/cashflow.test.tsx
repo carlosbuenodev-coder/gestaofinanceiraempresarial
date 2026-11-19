@@ -13,10 +13,12 @@ const totals = {
 }
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
 const summaryCalls = () => vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/fluxo-caixa/'))
+const movementCalls = () => summaryCalls().filter(([url]) => String(url).includes('/realizado?'))
 const params = (url: string) => new URL(url, 'http://local').searchParams
 let profile: string
 let getSummary: (url: URL) => Response | Promise<Response>
 let getAccounts: (url: URL) => Response | Promise<Response>
+let getMovements: (url: URL) => Response | Promise<Response>
 const account = { contaBancariaId: 15, receitasRealizadas: 80, despesasRealizadas: 100.01, saldoRealizado: -20.01, saldoBancarioAcumulado: null }
 const accounts = (items = [account], empresaId = 7) => ({
   empresaId, pagina: 1, tamanhoPagina: 100, total: items.length, itens: items,
@@ -47,10 +49,31 @@ function summary(url: URL, overrides = {}) {
   }
 }
 
+function movementPage(url: URL, { total = 1, empresaId = 7, descricao = 'Pagamento de teste' } = {}) {
+  const pagina = Number(url.searchParams.get('pagina'))
+  const offset = (pagina - 1) * 100
+  return {
+    empresaId, pagina, tamanhoPagina: 100, total,
+    itens: Array.from({ length: Math.min(100, Math.max(0, total - offset)) }, (_, index) => ({
+      lancamentoId: offset + index + 1, baixaId: offset + index + 1, contaBancariaId: 15,
+      tipo: url.searchParams.get('tipo') ?? 'DESPESA', descricao: total > 1 ? `${descricao} ${offset + index + 1}` : descricao,
+      categoriaId: 4, centroCustoId: null, data: `${url.searchParams.get('dataInicial')}T00:00:00`,
+      principal: 85.25, juros: 4, multa: 2, desconto: 1,
+    })),
+  }
+}
+
+function openMovements() {
+  fireEvent.click(screen.getByRole('button', { name: 'Ver movimentações realizadas' }))
+}
+
+const movementTable = () => screen.findByRole('table', { name: 'Movimentações realizadas' })
+
 beforeEach(() => {
   profile = 'ADMIN'
   getSummary = url => json(summary(url))
   getAccounts = () => json(accounts())
+  getMovements = url => json(movementPage(url))
   vi.stubGlobal('fetch', vi.fn(async input => {
     const url = new URL(String(input), 'http://local')
     if (url.pathname === '/auth/usuarios/login') {
@@ -59,8 +82,123 @@ beforeEach(() => {
     if (url.pathname === '/usuarios/me') return json({ ...usuario, perfil: profile })
     if (url.pathname === '/fluxo-caixa/resumo') return getSummary(url)
     if (url.pathname === '/fluxo-caixa/por-conta') return getAccounts(url)
+    if (url.pathname === '/fluxo-caixa/realizado') return getMovements(url)
     throw new Error('Requisição não simulada bloqueada')
   }))
+})
+
+describe('Detalhamento das movimentações realizadas', () => {
+  it.each([200, 409])('carrega sob demanda com resumo %s e preserva a visão já exibida', async status => {
+    profile = 'CONSULTA'
+    if (status === 409) getSummary = () => json({}, 409)
+    app(); await openCashflow(true)
+    const overview = status === 409 ? 'Realizado por conta' : 'Resumo do período'
+    await screen.findByRole('table', { name: overview })
+    expect(movementCalls()).toHaveLength(0)
+    openMovements()
+    const table = await movementTable()
+    const row = within(table).getByRole('row', { name: /Pagamento de teste/ })
+    expect(within(row).getAllByRole('cell').map(cell => cell.textContent?.replace(/\s/g, ' ')))
+      .toEqual([presetRange('current').dataInicial.split('-').reverse().join('/'), 'Despesa', 'Conta #15', 'R$ 85,25'])
+    expect(within(table).getByRole('columnheader', { name: 'Principal realizado' })).toBeTruthy()
+    expect(screen.getByRole('table', { name: overview })).toBeTruthy()
+    const [[url, options]] = movementCalls()
+    expect(Object.fromEntries(params(String(url)))).toEqual({ ...presetRange('current'), pagina: '1', tamanhoPagina: '100' })
+    expect(options).toMatchObject({ method: 'GET', headers: { Authorization: 'Bearer mock-only' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Ocultar movimentações realizadas' }))
+    expect(screen.queryByRole('table', { name: 'Movimentações realizadas' })).toBeNull()
+  })
+
+  it('pagina, oculta linhas antigas durante a consulta e reinicia ao aplicar novos filtros', async () => {
+    let finishPage!: () => void
+    getMovements = url => url.searchParams.get('pagina') === '2'
+      ? new Promise(resolve => { finishPage = () => resolve(json(movementPage(url, { total: 101, descricao: 'Página antiga' }))) })
+      : json(movementPage(url, { total: 101 }))
+    app(); await openCashflow()
+    await screen.findByRole('table', { name: 'Resumo do período' })
+    openMovements()
+    expect(within(await movementTable()).getAllByRole('row')).toHaveLength(101)
+    expect((screen.getByRole('button', { name: 'Anterior' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Próxima' }))
+    expect(await screen.findByText('Carregando movimentações realizadas…')).toBeTruthy()
+    expect(screen.queryByRole('table', { name: 'Movimentações realizadas' })).toBeNull()
+    const [pendingUrl, pendingOptions] = movementCalls().at(-1)!
+    expect(params(String(pendingUrl)).get('pagina')).toBe('2')
+
+    fireEvent.change(screen.getByLabelText('Tipo de movimentação'), { target: { value: 'RECEITA' } })
+    fireEvent.change(screen.getByLabelText('Data inicial'), { target: { value: '2026-10-01' } })
+    fireEvent.change(screen.getByLabelText('Data final'), { target: { value: '2026-10-31' } })
+    expect(movementCalls()).toHaveLength(2)
+    getMovements = url => json(movementPage(url, { total: 0 }))
+    fireEvent.click(screen.getByRole('button', { name: 'Aplicar filtros' }))
+    expect(await screen.findByText('Nenhuma movimentação realizada para os filtros aplicados.')).toBeTruthy()
+    expect(pendingOptions?.signal?.aborted).toBe(true)
+    expect(Object.fromEntries(params(String(movementCalls().at(-1)?.[0])))).toEqual({
+      dataInicial: '2026-10-01', dataFinal: '2026-10-31', tipo: 'RECEITA', pagina: '1', tamanhoPagina: '100',
+    })
+    await act(async () => finishPage())
+    expect(screen.queryByText('Página antiga 101')).toBeNull()
+  })
+
+  it('navega até a última página e retorna à primeira', async () => {
+    getMovements = url => json(movementPage(url, { total: 101 }))
+    app(); await openCashflow()
+    await screen.findByRole('table', { name: 'Resumo do período' })
+    openMovements()
+    await movementTable()
+    fireEvent.click(screen.getByRole('button', { name: 'Próxima' }))
+    expect(await screen.findByRole('rowheader', { name: 'Pagamento de teste 101' })).toBeTruthy()
+    expect(screen.getByText('Página 2 de 2')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Próxima' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Anterior' }))
+    expect(await screen.findByRole('rowheader', { name: 'Pagamento de teste 1' })).toBeTruthy()
+    expect(screen.getByText('Página 1 de 2')).toBeTruthy()
+  })
+
+  it.each([403, 500, 200])('preserva o resumo e permite repetir após resposta %s inválida para a consulta', async status => {
+    getMovements = url => status === 200 ? json(movementPage(url, { empresaId: 8 })) : json({ mensagem: 'Detalhe privado' }, status)
+    app(); await openCashflow()
+    await screen.findByRole('table', { name: 'Resumo do período' })
+    openMovements()
+    const alert = await screen.findByRole('alert')
+    const message = status === 403 ? 'Você não tem permissão' : status === 500 ? 'O sistema está temporariamente indisponível' : 'Não foi possível confirmar a resposta'
+    expect(alert.textContent).toContain(message)
+    expect(screen.queryByText('Detalhe privado')).toBeNull()
+    expect(screen.queryByText('Pagamento de teste')).toBeNull()
+    expect(screen.getByRole('table', { name: 'Resumo do período' })).toBeTruthy()
+    getMovements = url => json(movementPage(url))
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente o detalhamento' }))
+    expect(await movementTable()).toBeTruthy()
+    expect(movementCalls()[1][0]).toBe(movementCalls()[0][0])
+  })
+
+  it('encerra a sessão quando o detalhamento retorna 401', async () => {
+    getMovements = () => json({}, 401)
+    app(); await openCashflow()
+    await screen.findByRole('table', { name: 'Resumo do período' })
+    openMovements()
+    expect(await screen.findByText(/Sua sessão expirou/)).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Fluxo de caixa' })).toBeNull()
+  })
+
+  it('descarta o resultado de uma sessão anterior mesmo ao entrar na mesma empresa', async () => {
+    let finishSession!: () => void
+    getMovements = url => new Promise(resolve => { finishSession = () => resolve(json(movementPage(url, { descricao: 'Sessão anterior' }))) })
+    app(); await openCashflow()
+    await screen.findByRole('table', { name: 'Resumo do período' })
+    openMovements()
+    const signal = movementCalls()[0][1]?.signal
+    fireEvent.click(screen.getByRole('button', { name: 'Sair da conta' }))
+    expect(signal?.aborted).toBe(true)
+    getMovements = url => json(movementPage(url))
+    await openCashflow()
+    await screen.findByRole('table', { name: 'Resumo do período' })
+    openMovements()
+    expect(await movementTable()).toBeTruthy()
+    await act(async () => finishSession())
+    expect(screen.queryByText('Sessão anterior')).toBeNull()
+    expect(screen.getByText('Pagamento de teste')).toBeTruthy()
+  })
 })
 
 describe('Tela de fluxo de caixa', () => {

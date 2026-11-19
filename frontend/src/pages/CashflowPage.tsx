@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { useAuth } from '../hooks/useAuth'
 import { ApiError, unexpected } from '../services/api'
 import { cashflowApi } from '../services/cashflow'
-import type { CashflowFilters } from '../services/cashflow'
-import type { Conta, Resumo } from '../types/cashflow'
+import type { AuthorizedRequest, CashflowFilters } from '../services/cashflow'
+import type { Conta, Movimento, Pagina, Resumo } from '../types/cashflow'
 import { dateLabel, money, presetRange, validDate } from '../utils/format'
 
 type PartialCashflow = { conflict: string; contas?: Conta[]; error?: string }
@@ -13,12 +13,73 @@ function errorMessage(error: unknown) {
   return (error instanceof ApiError ? error : unexpected()).message
 }
 
+function RealizedMovements({ empresaId, filters, authorizedRequest }: {
+  empresaId: number
+  filters: CashflowFilters
+  authorizedRequest: AuthorizedRequest
+}) {
+  const [query, setQuery] = useState({ page: 1 })
+  const [loaded, setLoaded] = useState<{
+    query: typeof query
+    result: Pagina<Movimento> | { error: string }
+  } | null>(null)
+  const result = loaded?.query === query ? loaded.result : null
+
+  useEffect(() => {
+    const controller = new AbortController()
+    async function load() {
+      try {
+        const result = await cashflowApi(authorizedRequest, empresaId, filters, controller.signal).movimentos('realizado', query.page)
+        if (result.itens.some(item => {
+          const date = item.data.slice(0, 10)
+          return item.baixaId === null || item.contaBancariaId === null ||
+            date < filters.dataInicial || date > filters.dataFinal || (filters.tipo && item.tipo !== filters.tipo)
+        })) throw unexpected()
+        if (!controller.signal.aborted) setLoaded({ query, result })
+      } catch (error) {
+        if (!controller.signal.aborted) setLoaded({ query, result: { error: errorMessage(error) } })
+      }
+    }
+    void load()
+    return () => controller.abort()
+  }, [authorizedRequest, empresaId, filters, query])
+
+  if (!result) return <p role="status">Carregando movimentações realizadas…</p>
+  if ('error' in result) return <>
+    <p role="alert">Não foi possível carregar as movimentações realizadas. {result.error}</p>
+    <button className="button button-secondary" onClick={() => setQuery({ ...query })}>Tentar novamente o detalhamento</button>
+  </>
+
+  const totalPages = Math.max(1, Math.ceil(result.total / result.tamanhoPagina))
+  return <>
+    {result.itens.length === 0 ? <p className="empty-state" role="status">
+      {result.total === 0 ? 'Nenhuma movimentação realizada para os filtros aplicados.' : 'Nenhuma movimentação realizada nesta página.'}
+    </p> : <div className="table-scroll"><table>
+      <caption>Movimentações realizadas</caption>
+      <thead><tr><th scope="col">Data de pagamento</th><th scope="col">Descrição</th><th scope="col">Tipo</th><th scope="col">Conta</th><th scope="col">Principal realizado</th></tr></thead>
+      <tbody>{result.itens.map(item => <tr key={item.baixaId}>
+        <td>{dateLabel(item.data)}</td>
+        <th scope="row">{item.descricao}</th>
+        <td>{item.tipo === 'RECEITA' ? 'Receita' : 'Despesa'}</td>
+        <td>Conta #{item.contaBancariaId}</td>
+        <td>{money(item.principal)}</td>
+      </tr>)}</tbody>
+    </table></div>}
+    {(totalPages > 1 || query.page > 1) && <nav className="movement-actions" aria-label="Paginação das movimentações realizadas">
+      <button className="button button-secondary" disabled={query.page === 1} onClick={() => setQuery({ page: Math.min(query.page - 1, totalPages) })}>Anterior</button>
+      <span>Página {query.page}{query.page <= totalPages && ` de ${totalPages}`}</span>
+      <button className="button button-secondary" disabled={query.page >= totalPages} onClick={() => setQuery({ page: query.page + 1 })}>Próxima</button>
+    </nav>}
+  </>
+}
+
 export function CashflowPage() {
   const { usuario, authorizedRequest } = useAuth()
   const empresaId = usuario?.empresaId
   const [draft, setDraft] = useState<CashflowFilters>(() => presetRange('current'))
   const [filters, setFilters] = useState(draft)
   const [validation, setValidation] = useState('')
+  const [showMovements, setShowMovements] = useState(false)
   const [loaded, setLoaded] = useState<{ empresaId: number; filters: CashflowFilters; result: CashflowResult } | null>(null)
   const result = loaded && loaded.empresaId === empresaId && loaded.filters === filters ? loaded.result : null
 
@@ -133,6 +194,18 @@ export function CashflowPage() {
           </table>
         </div>}
       <p className="finance-note">O previsto usa o principal pendente por vencimento. O realizado usa o principal das baixas válidas por data de pagamento. O saldo bancário acumulado está indisponível neste resumo.</p>
+    </section>}
+    {empresaId && (resumo || partial) && <section className="finance-panel" aria-labelledby="cashflow-movements-title">
+      <div className="section-heading">
+        <h2 id="cashflow-movements-title">Detalhamento do realizado</h2>
+        <button className="button button-secondary" aria-expanded={showMovements} aria-controls="cashflow-movements"
+          onClick={() => setShowMovements(open => !open)}>
+          {showMovements ? 'Ocultar movimentações realizadas' : 'Ver movimentações realizadas'}
+        </button>
+      </div>
+      <div id="cashflow-movements" hidden={!showMovements}>
+        {showMovements && <RealizedMovements key={empresaId} empresaId={empresaId} filters={filters} authorizedRequest={authorizedRequest} />}
+      </div>
     </section>}
   </>
 }
